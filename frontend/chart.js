@@ -5,10 +5,11 @@ class ChartManager {
     constructor() {
         this.chart = null;
         this.candleSeries = null;
-        this.volumeSeries = null;
         this.ws = null;
         this.symbol = 'USD_MXN';
         this.isInitialized = false;
+        this.lastCandle = null;
+        this.animationInterval = null;
     }
 
     // Инициализация графика
@@ -54,19 +55,6 @@ class ChartManager {
             wickDownColor: '#ff4757',
         });
 
-        // Создаем серию объемов
-        this.volumeSeries = this.chart.addHistogramSeries({
-            color: '#26a69a',
-            priceFormat: {
-                type: 'volume',
-            },
-            priceScaleId: '', // отдельная шкала
-            scaleMargins: {
-                top: 0.8,
-                bottom: 0,
-            },
-        });
-
         // Обработка изменения размера окна
         window.addEventListener('resize', () => {
             if (this.chart && chartContainer) {
@@ -103,17 +91,17 @@ class ChartManager {
 
             // Устанавливаем данные свечей
             this.candleSeries.setData(data);
-
-            // Устанавливаем данные объемов
-            const volumeData = data.map(candle => ({
-                time: candle.time,
-                value: candle.volume,
-                color: candle.close >= candle.open ? '#26d07c80' : '#ff475780'
-            }));
-            this.volumeSeries.setData(volumeData);
+            
+            // Сохраняем последнюю свечу для анимации
+            if (data.length > 0) {
+                this.lastCandle = { ...data[data.length - 1] };
+            }
 
             // Автоматически подгоняем видимый диапазон
             this.chart.timeScale().fitContent();
+            
+            // Запускаем анимацию последней свечи
+            this.startCandleAnimation();
 
             console.log(`Loaded ${data.length} candles for ${symbol}`);
         } catch (error) {
@@ -146,7 +134,8 @@ class ChartManager {
                     if (message.type === 'subscribed') {
                         console.log(`Subscribed to ${message.symbol}`);
                     } else if (message.type === 'candle') {
-                        // Обновляем или добавляем новую свечу
+                        // Получили новую свечу с сервера (каждые 5 секунд)
+                        this.lastCandle = { ...message.data };
                         this.updateCandle(message.data);
                     }
                 } catch (error) {
@@ -175,19 +164,12 @@ class ChartManager {
 
     // Обновление свечи
     updateCandle(candle) {
-        if (!this.candleSeries || !this.volumeSeries) {
+        if (!this.candleSeries) {
             return;
         }
 
         // Обновляем свечу
         this.candleSeries.update(candle);
-
-        // Обновляем объем
-        this.volumeSeries.update({
-            time: candle.time,
-            value: candle.volume,
-            color: candle.close >= candle.open ? '#26d07c80' : '#ff475780'
-        });
 
         // Обновляем текущую цену в интерфейсе
         const priceEl = document.getElementById('current-price');
@@ -206,6 +188,51 @@ class ChartManager {
             }
             
             priceEl.dataset.prevPrice = candle.close;
+        }
+    }
+
+    // Анимация последней свечи (каждые 0.3 секунды)
+    startCandleAnimation() {
+        // Останавливаем предыдущую анимацию
+        if (this.animationInterval) {
+            clearInterval(this.animationInterval);
+        }
+
+        // Запускаем новую анимацию
+        this.animationInterval = setInterval(() => {
+            if (!this.lastCandle || !this.candleSeries) {
+                return;
+            }
+
+            // Создаем копию последней свечи
+            const animatedCandle = { ...this.lastCandle };
+            
+            // Генерируем небольшое случайное изменение цены (±0.02%)
+            const volatility = 0.0002;
+            const priceChange = (Math.random() - 0.5) * 2 * volatility;
+            const newClose = animatedCandle.close * (1 + priceChange);
+            
+            // Обновляем close
+            animatedCandle.close = parseFloat(newClose.toFixed(4));
+            
+            // Обновляем high и low если нужно
+            if (animatedCandle.close > animatedCandle.high) {
+                animatedCandle.high = animatedCandle.close;
+            }
+            if (animatedCandle.close < animatedCandle.low) {
+                animatedCandle.low = animatedCandle.close;
+            }
+            
+            // Обновляем свечу на графике
+            this.updateCandle(animatedCandle);
+        }, 300); // каждые 0.3 секунды
+    }
+
+    // Остановка анимации
+    stopCandleAnimation() {
+        if (this.animationInterval) {
+            clearInterval(this.animationInterval);
+            this.animationInterval = null;
         }
     }
 
@@ -229,6 +256,9 @@ class ChartManager {
     destroy() {
         this.isInitialized = false;
         
+        // Останавливаем анимацию
+        this.stopCandleAnimation();
+        
         if (this.ws) {
             this.ws.close();
             this.ws = null;
@@ -240,7 +270,7 @@ class ChartManager {
         }
 
         this.candleSeries = null;
-        this.volumeSeries = null;
+        this.lastCandle = null;
     }
 }
 
