@@ -1,14 +1,14 @@
 // Chart management module
-// Имитация графика бинарных опционов
+// Модуль управления графиком
 
 class ChartManager {
     constructor() {
         this.chart = null;
         this.candleSeries = null;
         this.volumeSeries = null;
-        this.symbol = 'USD/MXN OTC';
+        this.ws = null;
+        this.symbol = 'USD_MXN';
         this.isInitialized = false;
-        this.candles = [];
     }
 
     // Инициализация графика
@@ -31,9 +31,17 @@ class ChartManager {
                 vertLines: { color: '#2d3748' },
                 horzLines: { color: '#2d3748' },
             },
-            crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-            rightPriceScale: { borderColor: '#2d3748' },
-            timeScale: { borderColor: '#2d3748', timeVisible: true, secondsVisible: true },
+            crosshair: {
+                mode: LightweightCharts.CrosshairMode.Normal,
+            },
+            rightPriceScale: {
+                borderColor: '#2d3748',
+            },
+            timeScale: {
+                borderColor: '#2d3748',
+                timeVisible: true,
+                secondsVisible: true,
+            },
         });
 
         // Создаем серию свечей
@@ -49,104 +57,192 @@ class ChartManager {
         // Создаем серию объемов
         this.volumeSeries = this.chart.addHistogramSeries({
             color: '#26a69a',
-            priceFormat: { type: 'volume' },
-            priceScaleId: '',
-            scaleMargins: { top: 0.8, bottom: 0 },
+            priceFormat: {
+                type: 'volume',
+            },
+            priceScaleId: '', // отдельная шкала
+            scaleMargins: {
+                top: 0.8,
+                bottom: 0,
+            },
         });
 
+        // Обработка изменения размера окна
         window.addEventListener('resize', () => {
-            this.chart.applyOptions({
-                width: chartContainer.clientWidth,
-                height: chartContainer.clientHeight,
-            });
+            if (this.chart && chartContainer) {
+                this.chart.applyOptions({
+                    width: chartContainer.clientWidth,
+                    height: chartContainer.clientHeight,
+                });
+            }
         });
-
-        this.generateHistoricalData();
-        this.startRealtimeUpdates();
 
         this.isInitialized = true;
         console.log('Chart initialized');
     }
 
-    // Генерация исторических данных
-    generateHistoricalData() {
-        const now = Math.floor(Date.now() / 1000);
-        let lastClose = 18.9167; // начальная цена
-        this.candles = [];
+    // Загрузка исторических данных
+    async loadHistoricalData(symbol) {
+        try {
+            const API_URL = window.location.origin.includes('localhost')
+                ? 'http://localhost:3001'
+                : window.location.origin;
 
-        for (let i = 7 * 24 * 60; i >= 0; i--) { // 1 свеча = 5 мин (7 дней)
-            const time = now - i * 300;
-            const open = lastClose;
-            const change = (Math.random() - 0.5) * 0.02; // небольшие колебания
-            const close = open * (1 + change);
-            const high = Math.max(open, close) * (1 + Math.random() * 0.005);
-            const low = Math.min(open, close) * (1 - Math.random() * 0.005);
-            const volume = Math.random() * 1000 + 100;
+            const response = await fetch(`${API_URL}/api/chart/history?symbol=${symbol}`);
+            if (!response.ok) {
+                throw new Error('Failed to fetch chart data');
+            }
 
-            const candle = { time, open, high, low, close, volume };
-            this.candles.push(candle);
-            lastClose = close;
+            const result = await response.json();
+            const data = result.data;
+
+            if (!data || data.length === 0) {
+                console.warn('No chart data received');
+                return;
+            }
+
+            // Устанавливаем данные свечей
+            this.candleSeries.setData(data);
+
+            // Устанавливаем данные объемов
+            const volumeData = data.map(candle => ({
+                time: candle.time,
+                value: candle.volume,
+                color: candle.close >= candle.open ? '#26d07c80' : '#ff475780'
+            }));
+            this.volumeSeries.setData(volumeData);
+
+            // Автоматически подгоняем видимый диапазон
+            this.chart.timeScale().fitContent();
+
+            console.log(`Loaded ${data.length} candles for ${symbol}`);
+        } catch (error) {
+            console.error('Error loading historical data:', error);
         }
-
-        this.candleSeries.setData(this.candles);
-        this.volumeSeries.setData(this.candles.map(c => ({
-            time: c.time,
-            value: c.volume,
-            color: c.close >= c.open ? '#26d07c80' : '#ff475780'
-        })));
-
-        this.chart.timeScale().fitContent();
     }
 
-    // Реальное обновление свечей каждые 5 секунд
-    startRealtimeUpdates() {
-        setInterval(() => {
-            if (!this.candleSeries) return;
+    // Подключение к WebSocket
+    connectWebSocket(symbol) {
+        const wsUrl = window.location.origin.includes('localhost')
+            ? 'ws://localhost:3001/ws/chart'
+            : `ws://${window.location.host}/ws/chart`;
 
-            const lastCandle = this.candles[this.candles.length - 1];
-            const now = Math.floor(Date.now() / 1000);
-            let newCandle = lastCandle;
+        try {
+            this.ws = new WebSocket(wsUrl);
 
-            if (now - lastCandle.time >= 5) {
-                const open = lastCandle.close;
-                const change = (Math.random() - 0.5) * 0.01;
-                const close = open * (1 + change);
-                const high = Math.max(open, close) * (1 + Math.random() * 0.003);
-                const low = Math.min(open, close) * (1 - Math.random() * 0.003);
-                const volume = Math.random() * 1000 + 100;
+            this.ws.onopen = () => {
+                console.log('WebSocket connected');
+                // Подписываемся на символ
+                this.ws.send(JSON.stringify({
+                    type: 'subscribe',
+                    symbol: symbol
+                }));
+            };
 
-                newCandle = { time: now, open, high, low, close, volume };
-                this.candles.push(newCandle);
+            this.ws.onmessage = (event) => {
+                try {
+                    const message = JSON.parse(event.data);
 
-                // Ограничиваем историю 7 дней
-                if (this.candles.length > 2016) this.candles.shift(); // 7*24*60/5мин
+                    if (message.type === 'subscribed') {
+                        console.log(`Subscribed to ${message.symbol}`);
+                    } else if (message.type === 'candle') {
+                        // Обновляем или добавляем новую свечу
+                        this.updateCandle(message.data);
+                    }
+                } catch (error) {
+                    console.error('Error processing WebSocket message:', error);
+                }
+            };
+
+            this.ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+            };
+
+            this.ws.onclose = () => {
+                console.log('WebSocket disconnected');
+                // Переподключаемся через 5 секунд
+                setTimeout(() => {
+                    if (this.isInitialized) {
+                        console.log('Reconnecting WebSocket...');
+                        this.connectWebSocket(symbol);
+                    }
+                }, 5000);
+            };
+        } catch (error) {
+            console.error('Error connecting to WebSocket:', error);
+        }
+    }
+
+    // Обновление свечи
+    updateCandle(candle) {
+        if (!this.candleSeries || !this.volumeSeries) {
+            return;
+        }
+
+        // Обновляем свечу
+        this.candleSeries.update(candle);
+
+        // Обновляем объем
+        this.volumeSeries.update({
+            time: candle.time,
+            value: candle.volume,
+            color: candle.close >= candle.open ? '#26d07c80' : '#ff475780'
+        });
+
+        // Обновляем текущую цену в интерфейсе
+        const priceEl = document.getElementById('current-price');
+        if (priceEl) {
+            priceEl.textContent = candle.close.toFixed(4);
+            
+            // Добавляем анимацию изменения цены
+            priceEl.classList.remove('price-up', 'price-down');
+            
+            // Определяем направление изменения
+            const prevPrice = parseFloat(priceEl.dataset.prevPrice || candle.close);
+            if (candle.close > prevPrice) {
+                priceEl.classList.add('price-up');
+            } else if (candle.close < prevPrice) {
+                priceEl.classList.add('price-down');
             }
+            
+            priceEl.dataset.prevPrice = candle.close;
+        }
+    }
 
-            this.candleSeries.update(newCandle);
-            this.volumeSeries.update({
-                time: newCandle.time,
-                value: newCandle.volume,
-                color: newCandle.close >= newCandle.open ? '#26d07c80' : '#ff475780'
-            });
+    // Смена символа
+    async changeSymbol(newSymbol) {
+        this.symbol = newSymbol;
+        
+        // Закрываем старое WebSocket соединение
+        if (this.ws) {
+            this.ws.close();
+        }
 
-            // Обновляем текущую цену
-            const priceEl = document.getElementById('current-price');
-            if (priceEl) {
-                const prev = parseFloat(priceEl.dataset.prevPrice || newCandle.close);
-                priceEl.textContent = newCandle.close.toFixed(4);
-                priceEl.classList.remove('price-up', 'price-down');
-                if (newCandle.close > prev) priceEl.classList.add('price-up');
-                else if (newCandle.close < prev) priceEl.classList.add('price-down');
-                priceEl.dataset.prevPrice = newCandle.close;
-            }
-        }, 5000);
+        // Загружаем новые данные
+        await this.loadHistoricalData(newSymbol);
+
+        // Подключаемся к новому WebSocket
+        this.connectWebSocket(newSymbol);
+    }
+
+    // Очистка ресурсов
+    destroy() {
+        this.isInitialized = false;
+        
+        if (this.ws) {
+            this.ws.close();
+            this.ws = null;
+        }
+
+        if (this.chart) {
+            this.chart.remove();
+            this.chart = null;
+        }
+
+        this.candleSeries = null;
+        this.volumeSeries = null;
     }
 }
 
 // Глобальный экземпляр менеджера графика
 window.chartManager = new ChartManager();
-
-// Инициализация после загрузки страницы
-window.addEventListener('DOMContentLoaded', () => {
-    window.chartManager.init();
-});
