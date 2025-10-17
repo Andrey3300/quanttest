@@ -3,6 +3,8 @@ const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const nodemailer = require('nodemailer');
+const fs = require('fs');
+const path = require('path');
 require('dotenv').config();
 
 const app = express();
@@ -12,8 +14,33 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('frontend'));
 
-// In-memory user storage (в продакшене использовать базу данных)
-const users = [];
+// Users file path
+const USERS_FILE = path.join(__dirname, 'users.json');
+
+// Load users from file
+function loadUsers() {
+  try {
+    if (fs.existsSync(USERS_FILE)) {
+      const data = fs.readFileSync(USERS_FILE, 'utf8');
+      return JSON.parse(data);
+    }
+  } catch (error) {
+    console.error('Error loading users:', error);
+  }
+  return [];
+}
+
+// Save users to file
+function saveUsers(users) {
+  try {
+    fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2), 'utf8');
+  } catch (error) {
+    console.error('Error saving users:', error);
+  }
+}
+
+// Initialize users
+let users = loadUsers();
 
 // Email transporter
 const transporter = nodemailer.createTransport({
@@ -47,41 +74,57 @@ const authenticateToken = (req, res, next) => {
 // Регистрация
 app.post('/api/register', async (req, res) => {
   try {
-    const { username, password, email } = req.body;
+    const { email, password } = req.body;
 
-    if (!username || !password) {
-      return res.status(400).json({ error: 'Username and password are required' });
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password are required' });
     }
 
     // Проверка существования пользователя
-    const existingUser = users.find(u => u.username === username);
+    const existingUser = users.find(u => u.email === email);
     if (existingUser) {
-      return res.status(400).json({ error: 'Username already exists' });
+      // Если пользователь существует, проверяем пароль
+      const validPassword = await bcrypt.compare(password, existingUser.password);
+      if (!validPassword) {
+        return res.status(400).json({ error: 'Incorrect password' });
+      }
+
+      // Пароль правильный - выполняем вход
+      const token = jwt.sign({ id: existingUser.id, email: existingUser.email }, process.env.JWT_SECRET || 'secret', { expiresIn: '24h' });
+
+      return res.json({
+        token,
+        user: {
+          id: existingUser.id,
+          email: existingUser.email,
+          balance: existingUser.balance
+        }
+      });
     }
 
     // Хеширование пароля
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Создание пользователя
+    // Создание нового пользователя
     const user = {
-      id: users.length + 1,
-      username,
-      email: email || null,
+      id: users.length > 0 ? Math.max(...users.map(u => u.id)) + 1 : 1,
+      email,
       password: hashedPassword,
       balance: 21455.50, // Начальный баланс
-      createdAt: new Date()
+      createdAt: new Date().toISOString()
     };
 
     users.push(user);
+    saveUsers(users);
 
     // Создание токена
-    const token = jwt.sign({ id: user.id, username: user.username }, process.env.JWT_SECRET, { expiresIn: '24h' });
+    const token = jwt.sign({ id: user.id, email: user.email }, process.env.JWT_SECRET || 'secret', { expiresIn: '24h' });
 
     res.json({
       token,
       user: {
         id: user.id,
-        username: user.username,
+        email: user.email,
         balance: user.balance
       }
     });
@@ -94,14 +137,14 @@ app.post('/api/register', async (req, res) => {
 // Вход
 app.post('/api/login', async (req, res) => {
   try {
-    const { username, password } = req.body;
+    const { email, password } = req.body;
 
-    if (!username || !password) {
-      return res.status(400).json({ error: 'Username and password are required' });
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password are required' });
     }
 
     // Поиск пользователя
-    const user = users.find(u => u.username === username);
+    const user = users.find(u => u.email === email);
     if (!user) {
       return res.status(400).json({ error: 'Invalid credentials' });
     }
@@ -113,13 +156,13 @@ app.post('/api/login', async (req, res) => {
     }
 
     // Создание токена
-    const token = jwt.sign({ id: user.id, username: user.username }, process.env.JWT_SECRET, { expiresIn: '24h' });
+    const token = jwt.sign({ id: user.id, email: user.email }, process.env.JWT_SECRET || 'secret', { expiresIn: '24h' });
 
     res.json({
       token,
       user: {
         id: user.id,
-        username: user.username,
+        email: user.email,
         balance: user.balance
       }
     });
@@ -177,7 +220,7 @@ app.get('/api/user', authenticateToken, (req, res) => {
 
   res.json({
     id: user.id,
-    username: user.username,
+    email: user.email,
     balance: user.balance
   });
 });
