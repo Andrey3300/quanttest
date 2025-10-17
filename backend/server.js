@@ -5,10 +5,14 @@ const jwt = require('jsonwebtoken');
 const nodemailer = require('nodemailer');
 const fs = require('fs');
 const path = require('path');
+const WebSocket = require('ws');
+const http = require('http');
+const { getGenerator } = require('./chartGenerator');
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const server = http.createServer(app);
 
 app.use(cors());
 app.use(express.json());
@@ -225,6 +229,110 @@ app.get('/api/user', authenticateToken, (req, res) => {
   });
 });
 
-app.listen(PORT, () => {
+// ===== CHART API =====
+
+// Получение исторических данных графика
+app.get('/api/chart/history', (req, res) => {
+  try {
+    const symbol = req.query.symbol || 'USD_MXN';
+    const from = req.query.from ? parseInt(req.query.from) : null;
+    const to = req.query.to ? parseInt(req.query.to) : null;
+    
+    const generator = getGenerator(symbol);
+    const data = generator.getHistoricalData(from, to);
+    
+    res.json({
+      symbol,
+      data
+    });
+  } catch (error) {
+    console.error('Chart history error:', error);
+    res.status(500).json({ error: 'Failed to fetch chart data' });
+  }
+});
+
+// ===== WEBSOCKET SERVER =====
+
+// Создание WebSocket сервера
+const wss = new WebSocket.Server({ server, path: '/ws/chart' });
+
+// Хранение активных подписок
+const subscriptions = new Map(); // symbol -> Set of WebSocket connections
+
+wss.on('connection', (ws, req) => {
+  console.log('New WebSocket connection');
+  
+  let currentSymbol = null;
+  
+  ws.on('message', (message) => {
+    try {
+      const data = JSON.parse(message);
+      
+      if (data.type === 'subscribe') {
+        const symbol = data.symbol || 'USD_MXN';
+        
+        // Отписываемся от предыдущего символа
+        if (currentSymbol && subscriptions.has(currentSymbol)) {
+          subscriptions.get(currentSymbol).delete(ws);
+        }
+        
+        // Подписываемся на новый символ
+        currentSymbol = symbol;
+        if (!subscriptions.has(symbol)) {
+          subscriptions.set(symbol, new Set());
+        }
+        subscriptions.get(symbol).add(ws);
+        
+        console.log(`Client subscribed to ${symbol}`);
+        
+        // Отправляем подтверждение
+        ws.send(JSON.stringify({
+          type: 'subscribed',
+          symbol
+        }));
+      }
+    } catch (error) {
+      console.error('WebSocket message error:', error);
+    }
+  });
+  
+  ws.on('close', () => {
+    // Удаляем подписку при отключении
+    if (currentSymbol && subscriptions.has(currentSymbol)) {
+      subscriptions.get(currentSymbol).delete(ws);
+    }
+    console.log('WebSocket connection closed');
+  });
+  
+  ws.on('error', (error) => {
+    console.error('WebSocket error:', error);
+  });
+});
+
+// Генерация и рассылка новых свечей каждые 5 секунд
+setInterval(() => {
+  subscriptions.forEach((clients, symbol) => {
+    if (clients.size > 0) {
+      const generator = getGenerator(symbol);
+      const newCandle = generator.generateNextCandle();
+      
+      const message = JSON.stringify({
+        type: 'candle',
+        symbol,
+        data: newCandle
+      });
+      
+      // Отправляем всем подписанным клиентам
+      clients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(message);
+        }
+      });
+    }
+  });
+}, 5000); // каждые 5 секунд
+
+server.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
+  console.log(`WebSocket server is running on ws://localhost:${PORT}/ws/chart`);
 });

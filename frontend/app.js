@@ -50,6 +50,15 @@ function showAuthPage() {
 function showTradingPage() {
     document.getElementById('auth-page').style.display = 'none';
     document.getElementById('trading-page').style.display = 'grid';
+    
+    // Инициализируем график при первом показе
+    if (window.chartManager && !window.chartManager.isInitialized) {
+        setTimeout(() => {
+            window.chartManager.init();
+            window.chartManager.loadHistoricalData('USD_MXN');
+            window.chartManager.connectWebSocket('USD_MXN');
+        }, 100);
+    }
 }
 
 // Переключение форм авторизации
@@ -279,17 +288,6 @@ function placeTrade(type) {
 function toggleUserMenu() {
     alert('Меню пользователя будет добавлено позже');
 }
-
-// Симуляция обновления цены
-setInterval(() => {
-    const priceEl = document.getElementById('current-price');
-    if (priceEl && document.getElementById('trading-page').style.display !== 'none') {
-        const currentPrice = parseFloat(priceEl.textContent);
-        const change = (Math.random() - 0.5) * 0.01;
-        const newPrice = (currentPrice + change).toFixed(4);
-        priceEl.textContent = newPrice;
-    }
-}, 2000);
 
 // Инициализация дисплея времени
 updateTimeDisplay();

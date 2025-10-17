@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>QuantFX - Binary Options Trading</title>
     <link rel="stylesheet" href="styles.css">
+    <!-- TradingView Lightweight Charts -->
+    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
     <!-- Страница регистрации/входа -->
@@ -151,15 +153,7 @@
 
             <!-- Область графика -->
             <div class="chart-container">
-                <div class="chart-placeholder">
-                    <svg width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                        <path d="M3 3v18h18"/>
-                        <path d="M18 17V9"/>
-                        <path d="M13 17V5"/>
-                        <path d="M8 17v-3"/>
-                    </svg>
-                    <p>График будет добавлен позже</p>
-                </div>
+                <div id="chart"></div>
             </div>
         </main>
 
@@ -236,6 +230,7 @@
         </aside>
     </div>
 
+    <script src="chart.js"></script>
     <script src="app.js"></script>
 </body>
 </html>
