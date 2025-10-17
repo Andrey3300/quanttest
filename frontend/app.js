@@ -75,8 +75,14 @@ function showForgotPassword() {
 async function handleLogin(event) {
     event.preventDefault();
     
-    const username = document.getElementById('login-username').value;
-    const password = document.getElementById('login-password').value;
+    const email = document.getElementById('login-email').value.trim();
+    const password = document.getElementById('login-password').value.trim();
+
+    // Проверка на пустые поля
+    if (!email || !password) {
+        alert('Почта и пароль обязательны');
+        return;
+    }
 
     try {
         const response = await fetch(`${API_URL}/api/login`, {
@@ -84,7 +90,7 @@ async function handleLogin(event) {
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ username, password })
+            body: JSON.stringify({ email, password })
         });
 
         const data = await response.json();
@@ -111,9 +117,14 @@ async function handleLogin(event) {
 async function handleRegister(event) {
     event.preventDefault();
     
-    const username = document.getElementById('register-username').value;
-    const email = document.getElementById('register-email').value;
-    const password = document.getElementById('register-password').value;
+    const email = document.getElementById('register-email').value.trim();
+    const password = document.getElementById('register-password').value.trim();
+
+    // Проверка на пустые поля
+    if (!email || !password) {
+        alert('Почта и пароль обязательны');
+        return;
+    }
 
     try {
         const response = await fetch(`${API_URL}/api/register`, {
@@ -121,7 +132,7 @@ async function handleRegister(event) {
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ username, email, password })
+            body: JSON.stringify({ email, password })
         });
 
         const data = await response.json();
