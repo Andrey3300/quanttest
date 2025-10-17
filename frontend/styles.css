@@ -289,6 +289,25 @@ body {
     color: var(--accent-green);
     font-size: 18px;
     font-weight: 700;
+    transition: all 0.3s ease;
+}
+
+.asset-price.price-up {
+    animation: priceUp 0.6s ease;
+}
+
+.asset-price.price-down {
+    animation: priceDown 0.6s ease;
+}
+
+@keyframes priceUp {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.1); color: #26d07c; }
+}
+
+@keyframes priceDown {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.1); color: #ff4757; }
 }
 
 .user-info {
@@ -361,23 +380,16 @@ body {
     margin: 16px;
     border-radius: 12px;
     border: 1px solid var(--border-color);
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    position: relative;
+    overflow: hidden;
 }
 
-.chart-placeholder {
-    text-align: center;
-    color: var(--text-secondary);
-}
-
-.chart-placeholder svg {
-    opacity: 0.3;
-    margin-bottom: 16px;
-}
-
-.chart-placeholder p {
-    font-size: 14px;
+#chart {
+    width: 100%;
+    height: 100%;
+    position: absolute;
+    top: 0;
+    left: 0;
 }
 
 /* Правая панель торговли */
