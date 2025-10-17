@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QuantFX - Binary Options Trading</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- Страница регистрации/входа -->
+    <div id="auth-page" class="auth-page">
+        <div class="auth-container">
+            <div class="auth-header">
+                <div class="logo">QuantFX</div>
+                <p class="tagline">Binary Options Trading Platform</p>
+            </div>
+
+            <!-- Форма входа -->
+            <div id="login-form" class="auth-form active">
+                <h2>Вход в аккаунт</h2>
+                <form onsubmit="handleLogin(event)">
+                    <div class="form-group">
+                        <label>Логин</label>
+                        <input type="text" id="login-username" required placeholder="Введите логин">
+                    </div>
+                    <div class="form-group">
+                        <label>Пароль</label>
+                        <input type="password" id="login-password" required placeholder="Введите пароль">
+                    </div>
+                    <button type="submit" class="btn-primary">Войти</button>
+                    <div class="form-links">
+                        <a href="#" onclick="showForgotPassword()">Забыли пароль?</a>
+                        <a href="#" onclick="showRegister()">Создать аккаунт</a>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Форма регистрации -->
+            <div id="register-form" class="auth-form">
+                <h2>Регистрация</h2>
+                <form onsubmit="handleRegister(event)">
+                    <div class="form-group">
+                        <label>Логин</label>
+                        <input type="text" id="register-username" required placeholder="Придумайте логин">
+                    </div>
+                    <div class="form-group">
+                        <label>Email (опционально)</label>
+                        <input type="email" id="register-email" placeholder="your@email.com">
+                    </div>
+                    <div class="form-group">
+                        <label>Пароль</label>
+                        <input type="password" id="register-password" required placeholder="Придумайте пароль">
+                    </div>
+                    <button type="submit" class="btn-primary">Зарегистрироваться</button>
+                    <div class="form-links">
+                        <a href="#" onclick="showLogin()">Уже есть аккаунт?</a>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Форма восстановления пароля -->
+            <div id="forgot-form" class="auth-form">
+                <h2>Восстановление пароля</h2>
+                <form onsubmit="handleForgotPassword(event)">
+                    <div class="form-group">
+                        <label>Email</label>
+                        <input type="email" id="forgot-email" required placeholder="Введите email">
+                    </div>
+                    <button type="submit" class="btn-primary">Отправить новый пароль</button>
+                    <div class="form-links">
+                        <a href="#" onclick="showLogin()">Вернуться к входу</a>
+                    </div>
+                </form>
+            </div>
+
+            <div id="auth-error" class="error-message"></div>
+            <div id="auth-success" class="success-message"></div>
+        </div>
+    </div>
+
+    <!-- Главная страница торговли -->
+    <div id="trading-page" class="trading-page" style="display: none;">
+        <!-- Левая панель навигации -->
+        <aside class="sidebar">
+            <div class="logo">QuantFX</div>
+            <nav class="nav-menu">
+                <button class="nav-item active" onclick="setActiveNav(this)">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path d="M3 3v18h18"/>
+                        <path d="M18 17V9"/>
+                        <path d="M13 17V5"/>
+                        <path d="M8 17v-3"/>
+                    </svg>
+                    <span>Trading</span>
+                </button>
+                <button class="nav-item" onclick="setActiveNav(this)">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                    </svg>
+                    <span>Chat</span>
+                </button>
+                <button class="nav-item" onclick="setActiveNav(this)">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+                    </svg>
+                    <span>Finance</span>
+                </button>
+                <button class="nav-item" onclick="setActiveNav(this)">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                        <circle cx="12" cy="7" r="4"/>
+                    </svg>
+                    <span>Profile</span>
+                </button>
+                <button class="nav-item" onclick="setActiveNav(this)">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <circle cx="12" cy="12" r="10"/>
+                        <path d="M12 16v-4M12 8h.01"/>
+                    </svg>
+                    <span>Help</span>
+                </button>
+            </nav>
+            <button class="logout-btn" onclick="handleLogout()">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                    <polyline points="16 17 21 12 16 7"/>
+                    <line x1="21" y1="12" x2="9" y2="12"/>
+                </svg>
+                <span>Logout</span>
+            </button>
+        </aside>
+
+        <!-- Основная область контента -->
+        <main class="main-content">
+            <!-- Верхняя панель -->
+            <header class="top-bar">
+                <div class="asset-selector">
+                    <span class="asset-name">USD/MXN OTC</span>
+                    <span class="asset-price" id="current-price">18.9167</span>
+                </div>
+                <div class="user-info">
+                    <div class="balance-display">
+                        <span class="balance-label">QT Real</span>
+                        <span class="balance-amount" id="user-balance">21,455.50</span>
+                        <span class="currency">USD</span>
+                    </div>
+                    <button class="top-up-btn">TOP UP</button>
+                    <div class="user-avatar" onclick="toggleUserMenu()">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z"/>
+                        </svg>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Область графика -->
+            <div class="chart-container">
+                <div class="chart-placeholder">
+                    <svg width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M3 3v18h18"/>
+                        <path d="M18 17V9"/>
+                        <path d="M13 17V5"/>
+                        <path d="M8 17v-3"/>
+                    </svg>
+                    <p>График будет добавлен позже</p>
+                </div>
+            </div>
+        </main>
+
+        <!-- Правая панель торговли -->
+        <aside class="trading-panel">
+            <div class="panel-header">
+                <button class="tab-btn active">Trade</button>
+            </div>
+
+            <div class="trade-settings">
+                <!-- Время экспирации -->
+                <div class="setting-group">
+                    <label>Expiration time</label>
+                    <div class="time-selector">
+                        <span class="time-display" id="expiration-time">00:00:05</span>
+                        <div class="time-controls">
+                            <button class="time-btn" onclick="adjustTime(1)">▲</button>
+                            <button class="time-btn" onclick="adjustTime(-1)">▼</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Сумма -->
+                <div class="setting-group">
+                    <label>Amount</label>
+                    <div class="amount-selector">
+                        <input type="number" id="trade-amount" value="200" min="1" step="1">
+                        <div class="amount-controls">
+                            <button class="amount-btn" onclick="adjustAmount(100)">▲</button>
+                            <button class="amount-btn" onclick="adjustAmount(-100)">▼</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Выплата -->
+                <div class="setting-group">
+                    <label>Payout</label>
+                    <div class="payout-display">
+                        <span class="payout-percent">+48%</span>
+                        <span class="payout-amount">+$296</span>
+                    </div>
+                </div>
+
+                <!-- Кнопки торговли -->
+                <div class="trade-buttons">
+                    <button class="trade-btn buy-btn" onclick="placeTrade('buy')">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M7 14l5-5 5 5z"/>
+                        </svg>
+                        BUY
+                    </button>
+                    <button class="trade-btn sell-btn" onclick="placeTrade('sell')">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M7 10l5 5 5-5z"/>
+                        </svg>
+                        SELL
+                    </button>
+                </div>
+
+                <!-- AI Trading кнопка -->
+                <button class="ai-trading-btn">
+                    <span class="ai-icon">AI</span>
+                    TRADING
+                </button>
+            </div>
+
+            <!-- Social Trading секция -->
+            <div class="social-trading">
+                <div class="social-header">Social Trading</div>
+                <div class="social-placeholder">
+                    <p>Social trading будет добавлен позже</p>
+                </div>
+            </div>
+        </aside>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
