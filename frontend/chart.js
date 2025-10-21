@@ -424,30 +424,19 @@ class ChartManager {
         try {
             this.candleSeries.update(candle);
             
-            // РЕШЕНИЕ #2: Синхронизация candleCount с реальными данными после обновления
+            // РЕШЕНИЕ #2 ИСПРАВЛЕНО: Надежный подсчет через инкремент
+            // НЕ используем candleSeries.data().length т.к. он возвращает только буфер!
             // Проверяем что свеча ДЕЙСТВИТЕЛЬНО добавлена
             if (isNewCandle && candle.time > beforeUpdateTime) {
                 actuallyAddedNewCandle = true;
                 
-                // Получаем реальное количество свечей из серии для синхронизации
-                try {
-                    const actualData = this.candleSeries.data();
-                    if (actualData && actualData.length > 0) {
-                        const realCount = actualData.length;
-                        if (realCount !== this.candleCount + 1) {
-                            window.errorLogger?.warn('chart', 'Candle count mismatch detected - synchronizing', {
-                                expectedCount: this.candleCount + 1,
-                                realCount: realCount,
-                                difference: realCount - (this.candleCount + 1)
-                            });
-                        }
-                        // Синхронизируем с реальностью
-                        this.candleCount = realCount;
-                    }
-                } catch (err) {
-                    // Если не удалось получить данные, используем инкремент
-                    this.candleCount++;
-                }
+                // ВАЖНО: Простой инкремент - единственный надежный способ
+                this.candleCount++;
+                
+                window.errorLogger?.debug('chart', 'New candle added - count incremented', {
+                    newCandleCount: this.candleCount,
+                    candleTime: candle.time
+                });
             }
             
             this.volumeSeries.update({
@@ -496,28 +485,40 @@ class ChartManager {
                         if (currentRange) {
                             const rightOffsetBars = 12; // фиксированный отступ справа из настроек
                             
-                            // Проверяем, находимся ли мы близко к концу графика
-                            const lastRealCandleIndex = this.candleCount - 1;
-                            const isNearEnd = currentRange.to >= (lastRealCandleIndex - 5);
+                            // РЕШЕНИЕ #4: Используем candleCount напрямую, не создаем промежуточных переменных
+                            // которые могут внести путаницу
+                            const isNearEnd = currentRange.to >= (this.candleCount - 1 - 5);
                             
                             // Логируем текущее состояние ПЕРЕД расчетами
                             window.errorLogger?.debug('range', 'Before scroll calculation', {
                                 candleCount: this.candleCount,
-                                lastRealCandleIndex: lastRealCandleIndex,
                                 currentRange: { from: currentRange.from, to: currentRange.to },
                                 isNearEnd: isNearEnd,
                                 rightOffsetBars: rightOffsetBars
                             });
                             
                             if (isNearEnd) {
-                                // РЕШЕНИЕ #3: ИСПРАВЛЕННЫЙ расчет диапазона
+                                // ЗАЩИТА #3: Проверяем разумность candleCount
+                                // Если candleCount резко изменился - это ошибка, игнорируем
+                                if (this.candleCount < 1000) {
+                                    window.errorLogger?.error('range', 'candleCount too low - skipping scroll', {
+                                        candleCount: this.candleCount,
+                                        lastCandleTime: this.lastCandle?.time
+                                    });
+                                    console.error('candleCount suspiciously low:', this.candleCount, '- skipping scroll');
+                                    return;
+                                }
+                                
                                 // 1. Вычисляем "чистую" ширину видимых свечей БЕЗ rightOffset
                                 const totalWidth = currentRange.to - currentRange.from;
                                 const pureVisibleBars = Math.max(this.MIN_VISIBLE_BARS, Math.floor(totalWidth - rightOffsetBars));
                                 
-                                // 2. Рассчитываем новый from относительно последней реальной свечи
-                                const newFrom = Math.max(0, lastRealCandleIndex - pureVisibleBars);
-                                const newTo = lastRealCandleIndex + rightOffsetBars;
+                                // 2. Используем candleCount для расчета (уже проверен выше)
+                                const safeLastCandleIndex = this.candleCount - 1;
+                                
+                                // 3. Рассчитываем новый from относительно последней реальной свечи
+                                const newFrom = Math.max(0, safeLastCandleIndex - pureVisibleBars);
+                                const newTo = safeLastCandleIndex + rightOffsetBars;
                                 
                                 // 3. КРИТИЧНО: Проверяем минимальную ширину
                                 const calculatedPureWidth = newTo - newFrom - rightOffsetBars;
