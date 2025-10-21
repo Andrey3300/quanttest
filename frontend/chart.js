@@ -272,6 +272,9 @@ class ChartManager {
             if (data.length > 0) {
                 this.lastCandle = data[data.length - 1];
             }
+            
+            // Синхронизируем после загрузки данных
+            setTimeout(() => this.syncCandleCount(), 100);
 
             // Устанавливаем данные объемов
             const volumeData = data.map(candle => ({
@@ -383,6 +386,24 @@ class ChartManager {
                 symbol: symbol
             });
             console.error('Error connecting to WebSocket:', error);
+        }
+    }
+
+    // Синхронизация candleCount с реальными данными
+    syncCandleCount() {
+        try {
+            const actualCount = this.candleSeries.data()?.length || 0;
+            if (actualCount > 0 && actualCount !== this.candleCount) {
+                window.errorLogger?.warn('chart', 'CandleCount mismatch detected! Syncing...', {
+                    trackedCount: this.candleCount,
+                    actualCount: actualCount,
+                    difference: actualCount - this.candleCount
+                });
+                console.warn(`CandleCount mismatch: tracked=${this.candleCount}, actual=${actualCount}. Syncing...`);
+                this.candleCount = actualCount;
+            }
+        } catch (error) {
+            window.errorLogger?.error('chart', 'Error syncing candle count', { error: error.message });
         }
     }
 
@@ -526,6 +547,9 @@ class ChartManager {
             // Обновляем lastCandle для следующих проверок
             this.lastCandle = candle;
             
+            // КРИТИЧНО: Синхронизируем candleCount с реальностью
+            this.syncCandleCount();
+            
             // Плавно прокручиваем к последней свече только если пользователь не взаимодействует
             if (!this.isUserInteracting) {
                 // РЕШЕНИЕ #4 & #6: Увеличенный debounce для стабильности
@@ -539,16 +563,32 @@ class ChartManager {
                         if (currentRange) {
                             const rightOffsetBars = 12; // фиксированный отступ справа из настроек
                             
-                            // РЕШЕНИЕ #4: Используем candleCount напрямую, не создаем промежуточных переменных
-                            // которые могут внести путаницу
-                            const isNearEnd = currentRange.to >= (this.candleCount - 1 - 5);
+                                // КРИТИЧНО: Синхронизируем перед проверкой
+                                this.syncCandleCount();
+                                
+                                // РЕШЕНИЕ #4: Используем candleCount напрямую, не создаем промежуточных переменных
+                                // которые могут внести путаницу
+                                const isNearEnd = currentRange.to >= (this.candleCount - 1 - 5);
                             
                             // Логируем текущее состояние ПЕРЕД расчетами
-                            window.errorLogger?.debug('range', 'Before scroll calculation', {
+                            const actualSeriesCount = this.candleSeries.data()?.length || 0;
+                            window.errorLogger?.info('range', 'Auto-scroll check', {
                                 candleCount: this.candleCount,
+                                actualSeriesCount: actualSeriesCount,
+                                countMatch: this.candleCount === actualSeriesCount,
                                 currentRange: { from: currentRange.from, to: currentRange.to },
+                                lastCandleIndex: this.candleCount - 1,
                                 isNearEnd: isNearEnd,
+                                threshold: this.candleCount - 1 - 5,
                                 rightOffsetBars: rightOffsetBars
+                            });
+                            
+                            console.log('[AUTO-SCROLL]', {
+                                candleCount: this.candleCount,
+                                actualInSeries: actualSeriesCount,
+                                currentTo: currentRange.to,
+                                threshold: this.candleCount - 1 - 5,
+                                isNearEnd: isNearEnd
                             });
                             
                             if (isNearEnd) {
@@ -636,7 +676,13 @@ class ChartManager {
                                 // Устанавливаем новый диапазон
                                 timeScale.setVisibleLogicalRange(newRange);
                                 
-                                window.errorLogger?.debug('range', 'Range applied successfully', { newRange });
+                                window.errorLogger?.info('range', 'Auto-scroll applied', { 
+                                    newRange,
+                                    candleCount: this.candleCount,
+                                    actualSeriesCount: this.candleSeries.data()?.length || 0
+                                });
+                                
+                                console.log('[AUTO-SCROLL] Applied new range:', newRange);
                                 
                                 // Через небольшую задержку возвращаем autoScale
                                 setTimeout(() => {
