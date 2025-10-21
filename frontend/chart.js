@@ -320,11 +320,17 @@ class ChartManager {
                     console.warn('Ignoring outdated tick - candle time:', candle.time, 'last candle time:', this.lastCandle.time);
                     return;
                 }
-                // Тик должен обновлять только текущую свечу (с тем же timestamp)
-                if (candle.time !== this.lastCandle.time) {
-                    console.warn('Tick time mismatch - candle:', candle.time, 'expected:', this.lastCandle.time);
-                    return;
+                // УЛУЧШЕНИЕ: Если тик пришел с новым временем - обрабатываем как новую свечу
+                if (candle.time > this.lastCandle.time) {
+                    window.errorLogger?.info('chart', 'Tick with new time - treating as new candle', {
+                        tickTime: candle.time,
+                        lastCandleTime: this.lastCandle.time,
+                        timeDiff: candle.time - this.lastCandle.time
+                    });
+                    console.log('Tick with new time - treating as new candle:', candle.time, 'last:', this.lastCandle.time);
+                    isNewCandle = true; // Переключаем в режим новой свечи
                 }
+                // Если candle.time === this.lastCandle.time - это нормальное обновление текущей свечи
             } else {
                 // Для новых свечей: время должно быть больше или равно времени последней свечи
                 if (candle.time < this.lastCandle.time) {
