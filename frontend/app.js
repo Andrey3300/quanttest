@@ -53,6 +53,7 @@ const assetsData = {
     cryptocurrencies: [
         { id: 'BNB_OTC', name: 'BNB OTC', payout: 92, symbol: 'BNB_OTC' },
         { id: 'ETH_OTC', name: 'Ethereum OTC', payout: 92, symbol: 'ETH_OTC' },
+        { id: 'TEST_TEST1', name: 'TEST/TEST1', payout: 92, symbol: 'TEST_TEST1' },
         { id: 'MATIC_OTC', name: 'Polygon OTC', payout: 91, symbol: 'MATIC_OTC' },
         { id: 'LTC_OTC', name: 'Litecoin OTC', payout: 82, symbol: 'LTC_OTC' },
         { id: 'BTC_ETF_OTC', name: 'Bitcoin ETF OTC', payout: 74, symbol: 'BTC_ETF_OTC' },
@@ -650,6 +651,7 @@ function getAssetIcon(asset) {
         'BTC_ETF_OTC': '₿',
         'ETH': 'Ξ',
         'ETH_OTC': 'Ξ',
+        'TEST_TEST1': '🧪',
         'BNB_OTC': '◆',
         'SOL_OTC': '◎',
         'DOGE_OTC': 'Ð',
