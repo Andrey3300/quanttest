@@ -9,8 +9,6 @@ class ChartManager {
         this.ws = null;
         this.symbol = 'USD_MXN_OTC';
         this.isInitialized = false;
-        this.animatingCandles = new Map(); // Хранение состояния анимирующихся свечей
-        this.finalizedCandles = new Set(); // Хранение завершенных свечей для предотвращения повторной анимации
     }
 
     // Инициализация графика
@@ -193,118 +191,16 @@ class ChartManager {
             return;
         }
 
-        const candleKey = candle.time;
+        // Просто обновляем свечу без анимации для предотвращения глитчей
+        this.candleSeries.update(candle);
+        this.volumeSeries.update({
+            time: candle.time,
+            value: candle.volume,
+            color: candle.close >= candle.open ? '#26d07c80' : '#ff475780'
+        });
         
-        // Если свеча уже завершила анимацию, просто обновляем её без новой анимации
-        if (this.finalizedCandles.has(candleKey)) {
-            this.candleSeries.update(candle);
-            this.volumeSeries.update({
-                time: candle.time,
-                value: candle.volume,
-                color: candle.close >= candle.open ? '#26d07c80' : '#ff475780'
-            });
-            this.updatePriceDisplay(candle.close);
-            return;
-        }
-        
-        // Если свеча уже анимируется, обновляем её финальные значения
-        if (this.animatingCandles.has(candleKey)) {
-            const animData = this.animatingCandles.get(candleKey);
-            animData.finalCandle = { ...candle };
-            return;
-        }
-
-        // Начинаем анимацию новой свечи
-        const animationData = {
-            startTime: Date.now(),
-            finalCandle: { ...candle },
-            currentCandle: { ...candle },
-            interval: null,
-            timeout: null
-        };
-
-        this.animatingCandles.set(candleKey, animationData);
-
-        // Функция анимации свечи
-        const animateCandle = () => {
-            const elapsed = Date.now() - animationData.startTime;
-            const animDuration = 5000; // 5 секунд
-            
-            if (elapsed >= animDuration) {
-                // Анимация завершена - фиксируем свечу
-                this.candleSeries.update(animationData.finalCandle);
-                this.volumeSeries.update({
-                    time: animationData.finalCandle.time,
-                    value: animationData.finalCandle.volume,
-                    color: animationData.finalCandle.close >= animationData.finalCandle.open ? '#26d07c80' : '#ff475780'
-                });
-                
-                // Останавливаем анимацию
-                if (animationData.interval) {
-                    clearInterval(animationData.interval);
-                }
-                if (animationData.timeout) {
-                    clearTimeout(animationData.timeout);
-                }
-                this.animatingCandles.delete(candleKey);
-                
-                // Помечаем свечу как завершенную, чтобы предотвратить повторную анимацию
-                this.finalizedCandles.add(candleKey);
-                
-                // Обновляем цену в UI
-                this.updatePriceDisplay(animationData.finalCandle.close);
-                return;
-            }
-
-            // Создаём плавное растягивание/сжатие свечи
-            const progress = elapsed / animDuration;
-            const final = animationData.finalCandle;
-            
-            // Определяем направление свечи (зеленая или красная)
-            const isBullish = final.close >= final.open;
-            
-            // Вычисляем амплитуду колебания (уменьшается со временем)
-            const amplitude = Math.abs(final.close - final.open) * 0.3 * (1 - progress);
-            
-            // Синусоидальное колебание с частотой ~3.33 раза в секунду (0.3 сек период)
-            const oscillation = Math.sin(elapsed / 300 * Math.PI * 2) * amplitude;
-            
-            // Плавно переходим к финальным значениям
-            const lerpFactor = progress * 0.7; // Постепенное схождение к финальным значениям
-            
-            // Open остается фиксированным, только close двигается
-            // Для зеленой свечи: close движется вверх от open
-            // Для красной свечи: close движется вниз от open
-            const currentCandle = {
-                time: final.time,
-                open: final.open, // Open всегда фиксирован
-                close: final.close * (1 - lerpFactor) + final.close * lerpFactor + (isBullish ? oscillation : -oscillation),
-                high: final.high,
-                low: final.low,
-                volume: final.volume
-            };
-
-            // Убедимся что high >= max(open, close) и low <= min(open, close)
-            currentCandle.high = Math.max(currentCandle.high, currentCandle.open, currentCandle.close);
-            currentCandle.low = Math.min(currentCandle.low, currentCandle.open, currentCandle.close);
-
-            // Обновляем свечу на графике
-            this.candleSeries.update(currentCandle);
-            this.volumeSeries.update({
-                time: currentCandle.time,
-                value: currentCandle.volume,
-                color: currentCandle.close >= currentCandle.open ? '#26d07c80' : '#ff475780'
-            });
-
-            // Обновляем цену в UI
-            this.updatePriceDisplay(currentCandle.close);
-        };
-
-        // Запускаем анимацию каждые 0.3 секунды
-        animationData.interval = setInterval(animateCandle, 300);
-        
-        // Также вызываем сразу
-        animateCandle();
+        // Обновляем цену в UI
+        this.updatePriceDisplay(candle.close);
     }
 
     // Обновление отображения цены
@@ -332,12 +228,6 @@ class ChartManager {
     async changeSymbol(newSymbol) {
         this.symbol = newSymbol;
         
-        // Останавливаем все анимации
-        this.stopAllAnimations();
-        
-        // Очищаем список завершенных свечей
-        this.finalizedCandles.clear();
-        
         // Закрываем старое WebSocket соединение
         if (this.ws) {
             this.ws.close();
@@ -360,28 +250,9 @@ class ChartManager {
         console.log(`Chart switched to ${newSymbol}`);
     }
 
-    // Остановка всех анимаций
-    stopAllAnimations() {
-        this.animatingCandles.forEach((animData) => {
-            if (animData.interval) {
-                clearInterval(animData.interval);
-            }
-            if (animData.timeout) {
-                clearTimeout(animData.timeout);
-            }
-        });
-        this.animatingCandles.clear();
-    }
-
     // Очистка ресурсов
     destroy() {
         this.isInitialized = false;
-        
-        // Останавливаем все анимации
-        this.stopAllAnimations();
-        
-        // Очищаем список завершенных свечей
-        this.finalizedCandles.clear();
         
         if (this.ws) {
             this.ws.close();
