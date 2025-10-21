@@ -267,8 +267,36 @@ class ChartManager {
 
         // Проверяем корректность данных
         if (!candle || typeof candle.time === 'undefined') {
-            console.warn('Invalid candle data received');
+            console.warn('Invalid candle data received:', candle);
             return;
+        }
+        
+        // КРИТИЧЕСКАЯ ПРОВЕРКА: время должно быть числом, а не объектом
+        if (typeof candle.time !== 'number' || isNaN(candle.time)) {
+            console.error('Invalid candle time format - expected number, got:', typeof candle.time, candle.time);
+            return;
+        }
+        
+        // Проверка на устаревшие данные
+        if (this.lastCandle && this.lastCandle.time) {
+            if (!isNewCandle) {
+                // Для тиков: проверяем что обновляем текущую свечу, а не старую
+                if (candle.time < this.lastCandle.time) {
+                    console.warn('Ignoring outdated tick - candle time:', candle.time, 'last candle time:', this.lastCandle.time);
+                    return;
+                }
+                // Тик должен обновлять только текущую свечу (с тем же timestamp)
+                if (candle.time !== this.lastCandle.time) {
+                    console.warn('Tick time mismatch - candle:', candle.time, 'expected:', this.lastCandle.time);
+                    return;
+                }
+            } else {
+                // Для новых свечей: время должно быть больше или равно времени последней свечи
+                if (candle.time < this.lastCandle.time) {
+                    console.error('New candle has older timestamp - candle:', candle.time, 'last:', this.lastCandle.time);
+                    return;
+                }
+            }
         }
         
         // Валидация OHLC - критически важно!
@@ -289,12 +317,17 @@ class ChartManager {
         this.lastUpdateTime = now;
 
         // Обновляем свечу без перерисовки всего графика
-        this.candleSeries.update(candle);
-        this.volumeSeries.update({
-            time: candle.time,
-            value: candle.volume,
-            color: candle.close >= candle.open ? '#26d07c80' : '#ff475780'
-        });
+        try {
+            this.candleSeries.update(candle);
+            this.volumeSeries.update({
+                time: candle.time,
+                value: candle.volume,
+                color: candle.close >= candle.open ? '#26d07c80' : '#ff475780'
+            });
+        } catch (error) {
+            console.error('Error updating chart:', error, 'Candle:', candle, 'Last candle:', this.lastCandle);
+            return;
+        }
         
         // Обновляем цену в UI
         this.updatePriceDisplay(candle.close);
