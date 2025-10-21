@@ -392,6 +392,13 @@ setInterval(() => {
   // Блокируем отправку тиков
   isCreatingNewCandle = true;
   
+  // РЕШЕНИЕ #5: Логируем начало создания новых свечей
+  const startTime = Date.now();
+  logger.debug('websocket', 'Creating new candles for all symbols', {
+    symbolCount: subscriptions.size,
+    timestamp: startTime
+  });
+  
   subscriptions.forEach((clients, symbol) => {
     if (clients.size > 0) {
       const generator = getGenerator(symbol);
@@ -407,6 +414,22 @@ setInterval(() => {
         return;
       }
       
+      // РЕШЕНИЕ #5: Валидация OHLC перед отправкой
+      const isValidOHLC = newCandle.high >= newCandle.low &&
+                          newCandle.high >= newCandle.open &&
+                          newCandle.high >= newCandle.close &&
+                          newCandle.low <= newCandle.open &&
+                          newCandle.low <= newCandle.close;
+      
+      if (!isValidOHLC) {
+        logger.error('websocket', 'Invalid OHLC data in new candle', {
+          symbol: symbol,
+          candle: newCandle
+        });
+        console.error('Invalid OHLC data:', newCandle);
+        return;
+      }
+      
       const message = JSON.stringify({
         type: 'newCandle',
         symbol,
@@ -414,21 +437,28 @@ setInterval(() => {
       });
       
       // Отправляем всем подписанным клиентам
+      let sentCount = 0;
       clients.forEach(client => {
         if (client.readyState === WebSocket.OPEN) {
           client.send(message);
+          sentCount++;
         }
       });
       
       logger.logCandle('New candle sent to clients', symbol, newCandle);
+      logger.debug('websocket', 'New candle broadcast complete', {
+        symbol: symbol,
+        time: newCandle.time,
+        clientCount: sentCount
+      });
       console.log(`New candle created for ${symbol} at time ${newCandle.time}`);
     }
   });
   
-  // Разблокируем отправку тиков через 200ms, чтобы дать время фронтенду обработать новую свечу
+  // РЕШЕНИЕ #4: Увеличиваем задержку с 200ms до 500ms для стабильной обработки
   setTimeout(() => {
     isCreatingNewCandle = false;
-  }, 200);
+  }, 500);
 }, 5000); // каждые 5 секунд фиксируем свечу и создаем новую
 
 server.listen(PORT, () => {

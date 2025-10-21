@@ -363,6 +363,9 @@ class ChartManager {
             return;
         }
         
+        // РЕШЕНИЕ #3: Отслеживаем timestamp ПЕРЕД обновлением для проверки
+        const beforeUpdateTime = this.lastCandle?.time || 0;
+        
         // Проверка на устаревшие данные
         if (this.lastCandle && this.lastCandle.time) {
             if (!isNewCandle) {
@@ -385,6 +388,11 @@ class ChartManager {
             } else {
                 // Для новых свечей: время должно быть больше или равно времени последней свечи
                 if (candle.time < this.lastCandle.time) {
+                    window.errorLogger?.error('chart', 'REJECTED: New candle has older timestamp', {
+                        candleTime: candle.time,
+                        lastTime: this.lastCandle.time,
+                        candleCount: this.candleCount
+                    });
                     console.error('New candle has older timestamp - candle:', candle.time, 'last:', this.lastCandle.time);
                     return;
                 }
@@ -409,15 +417,50 @@ class ChartManager {
         }
         this.lastUpdateTime = now;
 
+        // РЕШЕНИЕ #3: Отслеживаем успешность добавления свечи
+        let actuallyAddedNewCandle = false;
+        
         // Обновляем свечу без перерисовки всего графика
         try {
             this.candleSeries.update(candle);
+            
+            // РЕШЕНИЕ #2: Синхронизация candleCount с реальными данными после обновления
+            // Проверяем что свеча ДЕЙСТВИТЕЛЬНО добавлена
+            if (isNewCandle && candle.time > beforeUpdateTime) {
+                actuallyAddedNewCandle = true;
+                
+                // Получаем реальное количество свечей из серии для синхронизации
+                try {
+                    const actualData = this.candleSeries.data();
+                    if (actualData && actualData.length > 0) {
+                        const realCount = actualData.length;
+                        if (realCount !== this.candleCount + 1) {
+                            window.errorLogger?.warn('chart', 'Candle count mismatch detected - synchronizing', {
+                                expectedCount: this.candleCount + 1,
+                                realCount: realCount,
+                                difference: realCount - (this.candleCount + 1)
+                            });
+                        }
+                        // Синхронизируем с реальностью
+                        this.candleCount = realCount;
+                    }
+                } catch (err) {
+                    // Если не удалось получить данные, используем инкремент
+                    this.candleCount++;
+                }
+            }
+            
             this.volumeSeries.update({
                 time: candle.time,
                 value: candle.volume,
                 color: candle.close >= candle.open ? '#26d07c80' : '#ff475780'
             });
         } catch (error) {
+            window.errorLogger?.error('chart', 'Error updating chart', {
+                error: error.message,
+                candle: candle,
+                lastCandle: this.lastCandle
+            });
             console.error('Error updating chart:', error, 'Candle:', candle, 'Last candle:', this.lastCandle);
             return;
         }
@@ -425,23 +468,24 @@ class ChartManager {
         // Обновляем цену в UI
         this.updatePriceDisplay(candle.close);
         
-        // Если это новая свеча, обновляем счетчик и прокручиваем график
-        if (isNewCandle) {
-            window.errorLogger?.info('chart', 'New candle created', { 
+        // РЕШЕНИЕ #3: Обновляем счетчик ТОЛЬКО если свеча реально добавлена
+        if (actuallyAddedNewCandle) {
+            window.errorLogger?.info('chart', 'New candle successfully added', { 
                 time: candle.time, 
                 timeISO: new Date(candle.time * 1000).toISOString(),
                 open: candle.open, 
-                close: candle.close 
+                close: candle.close,
+                candleCount: this.candleCount,
+                beforeUpdateTime: beforeUpdateTime
             });
             console.log('New candle created:', candle.time, 'open:', candle.open, 'close:', candle.close);
             
-            // Увеличиваем счетчик свечей
-            this.candleCount++;
+            // Обновляем lastCandle для следующих проверок
             this.lastCandle = candle;
             
             // Плавно прокручиваем к последней свече только если пользователь не взаимодействует
             if (!this.isUserInteracting) {
-                // РЕШЕНИЕ #6: Используем debounce для предотвращения множественных вызовов
+                // РЕШЕНИЕ #4 & #6: Увеличенный debounce для стабильности
                 clearTimeout(this.scrollDebounceTimer);
                 
                 this.scrollDebounceTimer = setTimeout(() => {
@@ -554,7 +598,7 @@ class ChartManager {
                         console.error('Error scrolling chart:', error);
                         this.isAdjustingScale = false;
                     }
-                }, 50); // 50ms debounce
+                }, 300); // РЕШЕНИЕ #4: Увеличено с 50ms до 300ms для стабильности
             } else {
                 window.errorLogger?.debug('range', 'Skipping scroll - user is interacting');
             }

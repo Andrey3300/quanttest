@@ -133,25 +133,29 @@ class ChartGenerator {
         // Новая свеча ВСЕГДА начинается с цены закрытия предыдущей свечи
         const openPrice = this.currentPrice;
         
-        // КРИТИЧНО: Выравниваем timestamp по сетке 5 секунд
-        const currentTimeSeconds = Math.floor(now / 1000);
-        let timestamp = Math.floor(currentTimeSeconds / intervalSeconds) * intervalSeconds;
-        
-        // ВАЖНО: Проверяем что новая свеча не старше последней
+        // РЕШЕНИЕ #1: Не полагаемся на Date.now() для timestamp, а рассчитываем от последней свечи
+        // Это гарантирует монотонность времени и убирает зависимость от точности setInterval
+        let timestamp;
         if (this.candles.length > 0) {
             const lastCandle = this.candles[this.candles.length - 1];
-            if (timestamp <= lastCandle.time) {
-                // Если время такое же или меньше, добавляем интервал (5 секунд)
-                timestamp = lastCandle.time + intervalSeconds;
-                logger.warn('candle', 'Adjusted new candle timestamp to next interval', { 
-                    symbol: this.symbol,
-                    original: Math.floor(currentTimeSeconds / intervalSeconds) * intervalSeconds,
-                    adjusted: timestamp,
-                    lastTime: lastCandle.time,
-                    intervalSeconds: intervalSeconds
-                });
-                console.warn(`Adjusted new candle timestamp to next interval: ${timestamp}`);
-            }
+            // ВСЕГДА следующий интервал - гарантирует что timestamp строго больше предыдущего
+            timestamp = lastCandle.time + intervalSeconds;
+            
+            logger.debug('candle', 'Calculated timestamp from last candle', { 
+                symbol: this.symbol,
+                lastTime: lastCandle.time,
+                newTime: timestamp,
+                intervalSeconds: intervalSeconds
+            });
+        } else {
+            // Только для первой свечи выравниваем по сетке
+            const currentTimeSeconds = Math.floor(now / 1000);
+            timestamp = Math.floor(currentTimeSeconds / intervalSeconds) * intervalSeconds;
+            
+            logger.debug('candle', 'First candle - aligned to grid', { 
+                symbol: this.symbol,
+                timestamp: timestamp
+            });
         }
         
         // Создаем начальную свечу где open = high = low = close
@@ -197,8 +201,18 @@ class ChartGenerator {
             candle.time = Math.floor(Date.now() / 1000);
         }
         
-        // Логируем создание новой свечи
-        logger.logCandle('New candle', this.symbol, candle);
+        // РЕШЕНИЕ #5: Детальное логирование для мониторинга
+        logger.logCandle('New candle sent to clients', this.symbol, candle);
+        logger.debug('candle', 'Candle creation details', {
+            symbol: this.symbol,
+            time: candle.time,
+            timeISO: new Date(candle.time * 1000).toISOString(),
+            open: candle.open,
+            close: candle.close,
+            totalCandles: this.candles.length,
+            previousCandleTime: this.candles.length > 1 ? this.candles[this.candles.length - 2].time : null,
+            timeDiff: this.candles.length > 1 ? candle.time - this.candles[this.candles.length - 2].time : null
+        });
         
         return candle;
     }
