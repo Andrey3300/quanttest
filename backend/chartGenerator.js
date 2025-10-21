@@ -314,6 +314,7 @@ function getGenerator(symbol) {
             'BTC_OTC': { basePrice: 68750, volatility: 0.003, drift: 0.0 },
             'BTC_ETF_OTC': { basePrice: 68600, volatility: 0.003, drift: 0.0 },
             'ETH_OTC': { basePrice: 3450, volatility: 0.0035, drift: 0.0 },
+            'TEST_TEST1': { basePrice: 125.50, volatility: 0.0035, drift: 0.0 },
             'BNB_OTC': { basePrice: 585, volatility: 0.0032, drift: 0.0 },
             'SOL_OTC': { basePrice: 168, volatility: 0.0038, drift: 0.0 },
             'ADA_OTC': { basePrice: 0.58, volatility: 0.0036, drift: 0.0 },
