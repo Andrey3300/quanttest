@@ -189,9 +189,28 @@ class ChartManager {
             
             // Сохраняем последнюю свечу для анимации
             if (data.length > 0) {
-                this.lastCandle = { ...data[data.length - 1] };
-                this.currentCandle = { ...data[data.length - 1] };
-                this.targetCandle = { ...data[data.length - 1] };
+                const lastCandle = data[data.length - 1];
+                this.lastCandle = {
+                    time: lastCandle.time,
+                    open: lastCandle.open,
+                    high: lastCandle.high,
+                    low: lastCandle.low,
+                    close: lastCandle.close
+                };
+                this.currentCandle = {
+                    time: lastCandle.time,
+                    open: lastCandle.open,
+                    high: lastCandle.high,
+                    low: lastCandle.low,
+                    close: lastCandle.close
+                };
+                this.targetCandle = {
+                    time: lastCandle.time,
+                    open: lastCandle.open,
+                    high: lastCandle.high,
+                    low: lastCandle.low,
+                    close: lastCandle.close
+                };
             }
 
             // Автоматически подгоняем видимый диапазон
@@ -244,14 +263,34 @@ class ChartManager {
                     } else if (message.type === 'candle') {
                         // Получили новую свечу с сервера (каждые 5 секунд)
                         const isNewCandle = !this.lastCandle || this.lastCandle.time !== message.data.time;
-                        this.lastCandle = { ...message.data };
-                        // Устанавливаем целевую свечу для плавной интерполяции
-                        this.setTargetCandle(message.data);
+                        this.lastCandle = {
+                            time: message.data.time,
+                            open: message.data.open,
+                            high: message.data.high,
+                            low: message.data.low,
+                            close: message.data.close
+                        };
+                        
                         // Если это новая свеча (новый таймфрейм), сразу устанавливаем её без интерполяции
                         if (isNewCandle) {
-                            this.currentCandle = { ...message.data };
-                            this.targetCandle = { ...message.data };
+                            this.currentCandle = {
+                                time: message.data.time,
+                                open: message.data.open,
+                                high: message.data.high,
+                                low: message.data.low,
+                                close: message.data.close
+                            };
+                            this.targetCandle = {
+                                time: message.data.time,
+                                open: message.data.open,
+                                high: message.data.high,
+                                low: message.data.low,
+                                close: message.data.close
+                            };
                             this.updateCandleImmediate(message.data);
+                        } else {
+                            // Устанавливаем целевую свечу для плавной интерполяции
+                            this.setTargetCandle(message.data);
                         }
                         
                         // Не прокручиваем автоматически - пользователь сам управляет позицией графика
@@ -291,11 +330,29 @@ class ChartManager {
     // Установка целевой свечи для плавной интерполяции
     setTargetCandle(candle) {
         if (!this.targetCandle) {
-            this.targetCandle = { ...candle };
-            this.currentCandle = { ...candle };
+            this.targetCandle = {
+                time: candle.time,
+                open: candle.open,
+                high: candle.high,
+                low: candle.low,
+                close: candle.close
+            };
+            this.currentCandle = {
+                time: candle.time,
+                open: candle.open,
+                high: candle.high,
+                low: candle.low,
+                close: candle.close
+            };
         } else {
             // Обновляем только целевую свечу, интерполяция произойдет в анимации
-            this.targetCandle = { ...candle };
+            this.targetCandle = {
+                time: candle.time,
+                open: candle.open,
+                high: candle.high,
+                low: candle.low,
+                close: candle.close
+            };
         }
     }
 
@@ -314,6 +371,22 @@ class ChartManager {
     // Обновление свечи с текущим интерполированным состоянием
     updateCandle(candle) {
         if (!this.candleSeries) {
+            return;
+        }
+
+        // Проверяем валидность данных перед обновлением
+        if (!candle || typeof candle.time === 'undefined' || 
+            typeof candle.open !== 'number' || typeof candle.high !== 'number' || 
+            typeof candle.low !== 'number' || typeof candle.close !== 'number') {
+            console.warn('Invalid candle data, skipping update', candle);
+            return;
+        }
+        
+        // Проверяем что OHLC значения логичны
+        if (candle.high < candle.low || 
+            candle.high < candle.open || candle.high < candle.close ||
+            candle.low > candle.open || candle.low > candle.close) {
+            console.warn('Invalid OHLC relationships, skipping update', candle);
             return;
         }
 
@@ -393,7 +466,13 @@ class ChartManager {
             else precision = 8;
 
             // Плавно интерполируем текущую свечу к целевой
-            const animatedCandle = { ...this.currentCandle };
+            const animatedCandle = {
+                time: this.currentCandle.time, // Явно сохраняем time
+                open: this.currentCandle.open,
+                high: this.currentCandle.high,
+                low: this.currentCandle.low,
+                close: this.currentCandle.close
+            };
             
             // Интерполируем все значения OHLC
             animatedCandle.open = this.lerp(this.currentCandle.open, this.targetCandle.open, this.interpolationSpeed);
@@ -412,8 +491,14 @@ class ChartManager {
             animatedCandle.high = Math.max(animatedCandle.high, ...allPrices);
             animatedCandle.low = Math.min(animatedCandle.low, ...allPrices);
             
-            // Обновляем текущую свечу для следующей итерации
-            this.currentCandle = { ...animatedCandle };
+            // Обновляем текущую свечу для следующей итерации (с сохранением time)
+            this.currentCandle = {
+                time: animatedCandle.time,
+                open: animatedCandle.open,
+                high: animatedCandle.high,
+                low: animatedCandle.low,
+                close: animatedCandle.close
+            };
             
             // Добавляем небольшую микро-анимацию только к close (очень маленькую)
             const baseVolatility = this.getAnimationVolatility(animatedCandle.close);
@@ -427,6 +512,13 @@ class ChartManager {
             }
             if (animatedCandle.close < animatedCandle.low) {
                 animatedCandle.low = animatedCandle.close;
+            }
+            
+            // Убедимся что OHLC значения валидны перед обновлением
+            if (animatedCandle.high < animatedCandle.low) {
+                // Если high меньше low, что-то пошло не так, пропускаем это обновление
+                console.warn('Invalid OHLC: high < low, skipping update');
+                return;
             }
             
             // Обновляем свечу на графике
