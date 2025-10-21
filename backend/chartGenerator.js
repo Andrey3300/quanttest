@@ -111,9 +111,23 @@ class ChartGenerator {
     // Генерация новой свечи для real-time обновления
     generateNextCandle() {
         const now = Date.now();
-        const candle = this.generateCandle(now, this.currentPrice);
+        const precision = this.getPricePrecision(this.basePrice);
+        
+        // Новая свеча ВСЕГДА начинается с цены закрытия предыдущей свечи
+        const openPrice = this.currentPrice;
+        
+        // Создаем начальную свечу где open = high = low = close
+        // Это гарантирует правильное отображение и continuity между свечами
+        const candle = {
+            time: Math.floor(now / 1000),
+            open: parseFloat(openPrice.toFixed(precision)),
+            high: parseFloat(openPrice.toFixed(precision)),
+            low: parseFloat(openPrice.toFixed(precision)),
+            close: parseFloat(openPrice.toFixed(precision)),
+            volume: 1000
+        };
+        
         this.candles.push(candle);
-        this.currentPrice = candle.close;
         
         // Ограничиваем размер массива (храним последние 7 дней)
         const maxCandles = 7 * 24 * 60 * 12; // 7 дней * 5-секундные свечи
@@ -122,6 +136,7 @@ class ChartGenerator {
         }
         
         // Инициализируем состояние текущей свечи для плавных обновлений
+        // Начинаем с текущей цены и позволяем тикам развивать свечу
         this.currentCandleState = {
             time: candle.time,
             open: candle.open,
@@ -145,37 +160,46 @@ class ChartGenerator {
         }
         
         const precision = this.getPricePrecision(this.basePrice);
-        const now = Date.now();
         
         // Генерируем небольшое изменение цены для плавности
         const microVolatility = this.volatility * 0.3; // меньшая волатильность для плавности
-        const priceChange = this.randomNormal(0, microVolatility);
+        
+        // Mean reversion для тиков - стремимся к базовой цене
+        const meanReversionForce = (this.basePrice - this.currentCandleState.targetClose) * this.meanReversionSpeed;
+        const priceChange = this.randomNormal(0, microVolatility) + meanReversionForce;
         
         // Новая целевая цена close
-        const newTargetClose = this.currentCandleState.targetClose * (1 + priceChange);
+        let newTargetClose = this.currentCandleState.targetClose * (1 + priceChange);
         
         // Ограничиваем изменение в пределах разумного
         const maxChange = this.basePrice * 0.001; // 0.1% за тик
-        const limitedClose = Math.max(
+        newTargetClose = Math.max(
             this.currentCandleState.targetClose - maxChange,
             Math.min(this.currentCandleState.targetClose + maxChange, newTargetClose)
         );
         
-        // Обновляем текущее состояние
-        this.currentCandleState.targetClose = limitedClose;
-        this.currentCandleState.close = parseFloat(limitedClose.toFixed(precision));
+        // Убедимся что цена в разумных пределах
+        newTargetClose = Math.max(newTargetClose, this.basePrice * 0.9);
+        newTargetClose = Math.min(newTargetClose, this.basePrice * 1.1);
         
-        // Обновляем high и low если нужно
+        // Обновляем текущее состояние
+        this.currentCandleState.targetClose = newTargetClose;
+        this.currentCandleState.close = parseFloat(newTargetClose.toFixed(precision));
+        
+        // Обновляем currentPrice для следующей свечи
+        this.currentPrice = this.currentCandleState.close;
+        
+        // Обновляем high и low правильно
         if (this.currentCandleState.close > this.currentCandleState.high) {
             this.currentCandleState.high = this.currentCandleState.close;
             this.currentCandleState.targetHigh = this.currentCandleState.close;
         } else {
-            // Иногда обновляем high немного выше для реалистичности
-            if (Math.random() < 0.1) {
-                const newHigh = this.currentCandleState.close * (1 + Math.abs(this.randomNormal(0, microVolatility * 0.5)));
-                if (newHigh > this.currentCandleState.high) {
-                    this.currentCandleState.high = parseFloat(newHigh.toFixed(precision));
-                    this.currentCandleState.targetHigh = newHigh;
+            // Иногда создаем фитиль вверх для реалистичности
+            if (Math.random() < 0.08) {
+                const wickHigh = this.currentCandleState.close * (1 + Math.abs(this.randomNormal(0, microVolatility * 0.5)));
+                if (wickHigh > this.currentCandleState.high && wickHigh <= this.basePrice * 1.1) {
+                    this.currentCandleState.high = parseFloat(wickHigh.toFixed(precision));
+                    this.currentCandleState.targetHigh = wickHigh;
                 }
             }
         }
@@ -184,12 +208,12 @@ class ChartGenerator {
             this.currentCandleState.low = this.currentCandleState.close;
             this.currentCandleState.targetLow = this.currentCandleState.close;
         } else {
-            // Иногда обновляем low немного ниже для реалистичности
-            if (Math.random() < 0.1) {
-                const newLow = this.currentCandleState.close * (1 - Math.abs(this.randomNormal(0, microVolatility * 0.5)));
-                if (newLow < this.currentCandleState.low) {
-                    this.currentCandleState.low = parseFloat(newLow.toFixed(precision));
-                    this.currentCandleState.targetLow = newLow;
+            // Иногда создаем фитиль вниз для реалистичности
+            if (Math.random() < 0.08) {
+                const wickLow = this.currentCandleState.close * (1 - Math.abs(this.randomNormal(0, microVolatility * 0.5)));
+                if (wickLow < this.currentCandleState.low && wickLow >= this.basePrice * 0.9) {
+                    this.currentCandleState.low = parseFloat(wickLow.toFixed(precision));
+                    this.currentCandleState.targetLow = wickLow;
                 }
             }
         }
@@ -197,7 +221,7 @@ class ChartGenerator {
         // Немного увеличиваем объем
         this.currentCandleState.volume += Math.floor(Math.random() * 100);
         
-        // Обновляем последнюю свечу в массиве
+        // Обновляем последнюю свечу в массиве - КРИТИЧЕСКИ ВАЖНО!
         if (this.candles.length > 0) {
             const lastCandle = this.candles[this.candles.length - 1];
             if (lastCandle.time === this.currentCandleState.time) {
