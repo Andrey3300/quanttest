@@ -46,6 +46,8 @@ class ChartManager {
                 borderColor: '#2d3748',
                 timeVisible: true,
                 secondsVisible: true,
+                barSpacing: 8, // Делаем свечи толще
+                minBarSpacing: 4, // Минимальная толщина при максимальном отдалении
             },
         });
 
@@ -59,7 +61,7 @@ class ChartManager {
             wickDownColor: '#ff4757',
         });
 
-        // Создаем серию объемов
+        // Создаем серию объемов (скрыта)
         this.volumeSeries = this.chart.addHistogramSeries({
             color: '#26a69a',
             priceFormat: {
@@ -70,6 +72,7 @@ class ChartManager {
                 top: 0.8,
                 bottom: 0,
             },
+            visible: false, // Скрываем объемы
         });
 
         // Обработка изменения размера окна
