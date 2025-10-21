@@ -51,6 +51,8 @@ class ChartManager {
                     bottom: 0.1, // 10% отступ снизу
                 },
                 mode: LightweightCharts.PriceScaleMode.Normal,
+                autoScale: true, // автоматическое масштабирование
+                alignLabels: true,
             },
             timeScale: {
                 borderColor: '#2d3748',
@@ -141,6 +143,11 @@ class ChartManager {
         });
 
         this.isInitialized = true;
+        window.errorLogger?.info('chart', 'Chart initialized successfully', {
+            width: width,
+            height: height,
+            rightOffset: 12
+        });
         console.log('Chart initialized');
     }
 
@@ -182,6 +189,12 @@ class ChartManager {
             this.volumeSeries.setData(volumeData);
 
             // Автоматически подгоняем видимый диапазон только при первой загрузке
+            window.errorLogger?.info('chart', 'Historical data loaded', {
+                candleCount: data.length,
+                symbol: symbol,
+                firstTime: data[0]?.time,
+                lastTime: data[data.length - 1]?.time
+            });
             this.chart.timeScale().fitContent();
             
             // Устанавливаем начальный видимый диапазон (последние ~100 свечей)
@@ -197,6 +210,11 @@ class ChartManager {
 
             console.log(`Loaded ${data.length} candles for ${symbol}`);
         } catch (error) {
+            window.errorLogger?.error('chart', 'Error loading historical data', {
+                error: error.message,
+                stack: error.stack,
+                symbol: symbol
+            });
             console.error('Error loading historical data:', error);
         }
     }
@@ -211,6 +229,7 @@ class ChartManager {
             this.ws = new WebSocket(wsUrl);
 
             this.ws.onopen = () => {
+                window.errorLogger?.info('websocket', 'WebSocket connected', { symbol });
                 console.log('WebSocket connected');
                 // Подписываемся на символ
                 this.ws.send(JSON.stringify({
@@ -241,6 +260,10 @@ class ChartManager {
             };
 
             this.ws.onerror = (error) => {
+                window.errorLogger?.error('websocket', 'WebSocket error', { 
+                    error: String(error),
+                    symbol: symbol
+                });
                 console.error('WebSocket error:', error);
             };
 
@@ -255,6 +278,11 @@ class ChartManager {
                 }, 5000);
             };
         } catch (error) {
+            window.errorLogger?.error('websocket', 'Error connecting to WebSocket', {
+                error: error.message,
+                stack: error.stack,
+                symbol: symbol
+            });
             console.error('Error connecting to WebSocket:', error);
         }
     }
@@ -262,17 +290,24 @@ class ChartManager {
     // Обновление свечи с оптимизацией
     updateCandle(candle, isNewCandle = false) {
         if (!this.candleSeries || !this.volumeSeries) {
+            window.errorLogger?.error('chart', 'updateCandle called but series not initialized');
             return;
         }
 
         // Проверяем корректность данных
         if (!candle || typeof candle.time === 'undefined') {
+            window.errorLogger?.error('chart', 'Invalid candle data received', { candle });
             console.warn('Invalid candle data received:', candle);
             return;
         }
         
         // КРИТИЧЕСКАЯ ПРОВЕРКА: время должно быть числом, а не объектом
         if (typeof candle.time !== 'number' || isNaN(candle.time)) {
+            window.errorLogger?.error('chart', 'Invalid candle time format', { 
+                type: typeof candle.time, 
+                value: candle.time,
+                candle: candle
+            });
             console.error('Invalid candle time format - expected number, got:', typeof candle.time, candle.time);
             return;
         }
@@ -305,6 +340,7 @@ class ChartManager {
             candle.high < candle.close ||
             candle.low > candle.open ||
             candle.low > candle.close) {
+            window.errorLogger?.error('chart', 'Invalid OHLC data detected', { candle });
             console.error('Invalid OHLC data:', candle);
             return;
         }
@@ -334,6 +370,12 @@ class ChartManager {
         
         // Если это новая свеча, обновляем счетчик и прокручиваем график
         if (isNewCandle) {
+            window.errorLogger?.info('chart', 'New candle created', { 
+                time: candle.time, 
+                timeISO: new Date(candle.time * 1000).toISOString(),
+                open: candle.open, 
+                close: candle.close 
+            });
             console.log('New candle created:', candle.time, 'open:', candle.open, 'close:', candle.close);
             
             // Увеличиваем счетчик свечей
@@ -354,25 +396,65 @@ class ChartManager {
                         const previousLastIndex = this.candleCount - 2;
                         const isNearEnd = currentRange.to >= (previousLastIndex - 5);
                         
+                        // Логируем текущее состояние ПЕРЕД расчетами
+                        window.errorLogger?.debug('range', 'Before scroll calculation', {
+                            candleCount: this.candleCount,
+                            previousLastIndex: previousLastIndex,
+                            currentRange: { from: currentRange.from, to: currentRange.to },
+                            isNearEnd: isNearEnd,
+                            rightOffsetBars: rightOffsetBars
+                        });
+                        
                         if (isNearEnd) {
-                            // ИСПРАВЛЕНИЕ: Вычисляем ширину ТОЛЬКО видимых свечей (без rightOffset)
-                            // currentRange.to уже включает rightOffset, поэтому вычитаем его
-                            const visibleBarsWidth = currentRange.to - currentRange.from - rightOffsetBars;
+                            // ИСПРАВЛЕНИЕ 1: НЕ вычитаем rightOffset из ширины!
+                            // Просто берем реальную ширину видимого диапазона
+                            const visibleBarsWidth = currentRange.to - currentRange.from;
                             
-                            // Создаем новый диапазон, сохраняя ту же ширину видимых свечей
-                            // Новая последняя свеча имеет индекс this.candleCount - 1
+                            // ИСПРАВЛЕНИЕ 2: Проверяем что from не будет отрицательным
+                            const newFrom = Math.max(0, this.candleCount - 1 - visibleBarsWidth + rightOffsetBars);
+                            const newTo = this.candleCount - 1 + rightOffsetBars;
+                            
                             const newRange = {
-                                from: this.candleCount - 1 - visibleBarsWidth,
-                                to: this.candleCount - 1 + rightOffsetBars
+                                from: newFrom,
+                                to: newTo
                             };
                             
-                            // Устанавливаем новый диапазон БЕЗ анимации для плавного обновления
-                            timeScale.setVisibleLogicalRange(newRange);
+                            // Логируем расчеты
+                            window.errorLogger?.debug('range', 'Scroll calculation result', {
+                                visibleBarsWidth: visibleBarsWidth,
+                                calculatedFrom: this.candleCount - 1 - visibleBarsWidth + rightOffsetBars,
+                                newFrom: newFrom,
+                                newTo: newTo,
+                                newRange: newRange
+                            });
+                            
+                            // Проверка на разумность значений перед применением
+                            if (newFrom < 0 || newTo < 0 || newFrom >= newTo) {
+                                window.errorLogger?.error('range', 'Invalid range calculated!', {
+                                    newRange: newRange,
+                                    candleCount: this.candleCount,
+                                    currentRange: currentRange
+                                });
+                                console.error('Invalid range calculated:', newRange);
+                            } else {
+                                // Устанавливаем новый диапазон БЕЗ анимации для плавного обновления
+                                timeScale.setVisibleLogicalRange(newRange);
+                                
+                                window.errorLogger?.debug('range', 'Range applied successfully', { newRange });
+                            }
                         }
+                    } else {
+                        window.errorLogger?.warn('range', 'No current range available');
                     }
                 } catch (error) {
+                    window.errorLogger?.error('range', 'Error scrolling chart', { 
+                        error: error.message, 
+                        stack: error.stack 
+                    });
                     console.error('Error scrolling chart:', error);
                 }
+            } else {
+                window.errorLogger?.debug('range', 'Skipping scroll - user is interacting');
             }
         } else {
             // Для обновления текущей свечи (тик) просто обновляем lastCandle
