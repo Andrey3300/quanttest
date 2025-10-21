@@ -44,7 +44,6 @@ class ChartManager {
             },
             rightPriceScale: {
                 borderColor: '#2d3748',
-                autoScale: true, // Автоматическое масштабирование
                 scaleMargins: {
                     top: 0.1, // 10% отступ сверху
                     bottom: 0.1, // 10% отступ снизу
@@ -306,17 +305,14 @@ class ChartManager {
                         const candleData = this.candleSeries.data();
                         if (candleData && candleData.length > 0) {
                             const totalCandles = candleData.length;
-                            const visibleDistance = currentRange.to - currentRange.from;
                             const rightOffsetBars = 12; // фиксированный отступ справа
                             
                             // Если мы близко к концу (в пределах 20 свечей), прокручиваем
                             // Проверяем по реальному индексу последней свечи (totalCandles - 1)
-                            if (currentRange.to >= totalCandles - 1 + rightOffsetBars - 20) {
-                                // Устанавливаем новый диапазон с фиксированным отступом справа
-                                timeScale.setVisibleLogicalRange({
-                                    from: currentRange.from + 1,
-                                    to: totalCandles - 1 + rightOffsetBars
-                                });
+                            if (currentRange.to >= totalCandles - 2 + rightOffsetBars - 20) {
+                                // Используем scrollToPosition для плавной прокрутки без изменения масштаба
+                                // Прокручиваем на 1 свечу вправо
+                                timeScale.scrollToPosition(1, false);
                             }
                         }
                     }
