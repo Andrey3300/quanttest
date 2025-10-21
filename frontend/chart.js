@@ -9,6 +9,9 @@ class ChartManager {
         this.ws = null;
         this.symbol = 'USD_MXN_OTC';
         this.isInitialized = false;
+        this.isUserInteracting = false; // флаг взаимодействия пользователя
+        this.lastUpdateTime = 0; // время последнего обновления
+        this.updateThrottle = 50; // минимальный интервал между обновлениями (ms)
     }
 
     // Инициализация графика
@@ -51,7 +54,7 @@ class ChartManager {
             },
         });
 
-        // Создаем серию свечей
+        // Создаем серию свечей с оптимизацией
         this.candleSeries = this.chart.addCandlestickSeries({
             upColor: '#26d07c',
             downColor: '#ff4757',
@@ -59,6 +62,8 @@ class ChartManager {
             borderDownColor: '#ff4757',
             wickUpColor: '#26d07c',
             wickDownColor: '#ff4757',
+            priceLineVisible: true,
+            lastValueVisible: true,
         });
 
         // Создаем серию объемов (скрыта)
@@ -75,18 +80,50 @@ class ChartManager {
             visible: false, // Скрываем объемы
         });
 
-        // Обработка изменения размера окна
+        // Обработка изменения размера окна с дебаунсом
+        let resizeTimeout;
         window.addEventListener('resize', () => {
-            if (this.chart && chartContainer) {
-                const parentContainer = chartContainer.parentElement;
-                const width = parentContainer ? parentContainer.clientWidth : chartContainer.clientWidth;
-                const height = parentContainer ? parentContainer.clientHeight : chartContainer.clientHeight;
-                
-                this.chart.applyOptions({
-                    width: width,
-                    height: height,
-                });
-            }
+            clearTimeout(resizeTimeout);
+            resizeTimeout = setTimeout(() => {
+                if (this.chart && chartContainer) {
+                    const parentContainer = chartContainer.parentElement;
+                    const width = parentContainer ? parentContainer.clientWidth : chartContainer.clientWidth;
+                    const height = parentContainer ? parentContainer.clientHeight : chartContainer.clientHeight;
+                    
+                    this.chart.applyOptions({
+                        width: width,
+                        height: height,
+                    });
+                }
+            }, 100);
+        });
+        
+        // Отслеживание взаимодействия пользователя с графиком
+        chartContainer.addEventListener('mousedown', () => {
+            this.isUserInteracting = true;
+        });
+        
+        chartContainer.addEventListener('mouseup', () => {
+            setTimeout(() => {
+                this.isUserInteracting = false;
+            }, 100);
+        });
+        
+        chartContainer.addEventListener('touchstart', () => {
+            this.isUserInteracting = true;
+        });
+        
+        chartContainer.addEventListener('touchend', () => {
+            setTimeout(() => {
+                this.isUserInteracting = false;
+            }, 100);
+        });
+        
+        chartContainer.addEventListener('wheel', () => {
+            this.isUserInteracting = true;
+            setTimeout(() => {
+                this.isUserInteracting = false;
+            }, 200);
         });
 
         this.isInitialized = true;
@@ -157,9 +194,15 @@ class ChartManager {
 
                     if (message.type === 'subscribed') {
                         console.log(`Subscribed to ${message.symbol}`);
+                    } else if (message.type === 'tick') {
+                        // Плавное обновление текущей свечи
+                        this.updateCandle(message.data, false);
+                    } else if (message.type === 'newCandle') {
+                        // Создание новой свечи
+                        this.updateCandle(message.data, true);
                     } else if (message.type === 'candle') {
-                        // Обновляем или добавляем новую свечу
-                        this.updateCandle(message.data);
+                        // Обратная совместимость
+                        this.updateCandle(message.data, false);
                     }
                 } catch (error) {
                     console.error('Error processing WebSocket message:', error);
@@ -185,13 +228,26 @@ class ChartManager {
         }
     }
 
-    // Обновление свечи
-    updateCandle(candle) {
+    // Обновление свечи с оптимизацией
+    updateCandle(candle, isNewCandle = false) {
         if (!this.candleSeries || !this.volumeSeries) {
             return;
         }
 
-        // Просто обновляем свечу без анимации для предотвращения глитчей
+        // Проверяем корректность данных
+        if (!candle || typeof candle.time === 'undefined') {
+            console.warn('Invalid candle data received');
+            return;
+        }
+        
+        // Троттлинг обновлений - не чаще чем каждые 50ms
+        const now = Date.now();
+        if (!isNewCandle && (now - this.lastUpdateTime) < this.updateThrottle) {
+            return;
+        }
+        this.lastUpdateTime = now;
+
+        // Обновляем свечу без перерисовки всего графика
         this.candleSeries.update(candle);
         this.volumeSeries.update({
             time: candle.time,
@@ -201,6 +257,11 @@ class ChartManager {
         
         // Обновляем цену в UI
         this.updatePriceDisplay(candle.close);
+        
+        // Если это новая свеча, логируем
+        if (isNewCandle) {
+            console.log('New candle created:', candle.time);
+        }
     }
 
     // Обновление отображения цены

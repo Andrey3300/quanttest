@@ -121,7 +121,101 @@ class ChartGenerator {
             this.candles.shift();
         }
         
+        // Инициализируем состояние текущей свечи для плавных обновлений
+        this.currentCandleState = {
+            time: candle.time,
+            open: candle.open,
+            high: candle.high,
+            low: candle.low,
+            close: candle.close,
+            volume: candle.volume,
+            targetClose: candle.close,
+            targetHigh: candle.high,
+            targetLow: candle.low
+        };
+        
         return candle;
+    }
+    
+    // Генерация плавного обновления текущей свечи (тика)
+    generateCandleTick() {
+        if (!this.currentCandleState) {
+            // Если свечи нет, создаем начальную
+            return this.generateNextCandle();
+        }
+        
+        const precision = this.getPricePrecision(this.basePrice);
+        const now = Date.now();
+        
+        // Генерируем небольшое изменение цены для плавности
+        const microVolatility = this.volatility * 0.3; // меньшая волатильность для плавности
+        const priceChange = this.randomNormal(0, microVolatility);
+        
+        // Новая целевая цена close
+        const newTargetClose = this.currentCandleState.targetClose * (1 + priceChange);
+        
+        // Ограничиваем изменение в пределах разумного
+        const maxChange = this.basePrice * 0.001; // 0.1% за тик
+        const limitedClose = Math.max(
+            this.currentCandleState.targetClose - maxChange,
+            Math.min(this.currentCandleState.targetClose + maxChange, newTargetClose)
+        );
+        
+        // Обновляем текущее состояние
+        this.currentCandleState.targetClose = limitedClose;
+        this.currentCandleState.close = parseFloat(limitedClose.toFixed(precision));
+        
+        // Обновляем high и low если нужно
+        if (this.currentCandleState.close > this.currentCandleState.high) {
+            this.currentCandleState.high = this.currentCandleState.close;
+            this.currentCandleState.targetHigh = this.currentCandleState.close;
+        } else {
+            // Иногда обновляем high немного выше для реалистичности
+            if (Math.random() < 0.1) {
+                const newHigh = this.currentCandleState.close * (1 + Math.abs(this.randomNormal(0, microVolatility * 0.5)));
+                if (newHigh > this.currentCandleState.high) {
+                    this.currentCandleState.high = parseFloat(newHigh.toFixed(precision));
+                    this.currentCandleState.targetHigh = newHigh;
+                }
+            }
+        }
+        
+        if (this.currentCandleState.close < this.currentCandleState.low) {
+            this.currentCandleState.low = this.currentCandleState.close;
+            this.currentCandleState.targetLow = this.currentCandleState.close;
+        } else {
+            // Иногда обновляем low немного ниже для реалистичности
+            if (Math.random() < 0.1) {
+                const newLow = this.currentCandleState.close * (1 - Math.abs(this.randomNormal(0, microVolatility * 0.5)));
+                if (newLow < this.currentCandleState.low) {
+                    this.currentCandleState.low = parseFloat(newLow.toFixed(precision));
+                    this.currentCandleState.targetLow = newLow;
+                }
+            }
+        }
+        
+        // Немного увеличиваем объем
+        this.currentCandleState.volume += Math.floor(Math.random() * 100);
+        
+        // Обновляем последнюю свечу в массиве
+        if (this.candles.length > 0) {
+            const lastCandle = this.candles[this.candles.length - 1];
+            if (lastCandle.time === this.currentCandleState.time) {
+                lastCandle.close = this.currentCandleState.close;
+                lastCandle.high = this.currentCandleState.high;
+                lastCandle.low = this.currentCandleState.low;
+                lastCandle.volume = this.currentCandleState.volume;
+            }
+        }
+        
+        return {
+            time: this.currentCandleState.time,
+            open: this.currentCandleState.open,
+            high: this.currentCandleState.high,
+            low: this.currentCandleState.low,
+            close: this.currentCandleState.close,
+            volume: this.currentCandleState.volume
+        };
     }
 
     // Получение исторических данных
