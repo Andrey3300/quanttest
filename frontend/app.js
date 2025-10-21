@@ -56,11 +56,12 @@ function showTradingPage() {
     
     // Инициализируем график при первом показе
     if (window.chartManager && !window.chartManager.isInitialized) {
+        // Увеличиваем задержку для правильной инициализации размеров
         setTimeout(() => {
             window.chartManager.init();
             window.chartManager.loadHistoricalData('USD_MXN');
             window.chartManager.connectWebSocket('USD_MXN');
-        }, 100);
+        }, 200);
     }
 }
 
@@ -327,16 +328,25 @@ async function selectAccount(accountType) {
         
         if (response.ok) {
             const data = await response.json();
-            currentUser = data;
-            currentAccountType = accountType;
-            localStorage.setItem('accountType', accountType);
+            // Обновляем данные пользователя
+            currentUser = {
+                ...currentUser,
+                demoBalance: data.demoBalance,
+                realBalance: data.realBalance,
+                activeAccount: data.activeAccount
+            };
+            currentAccountType = data.activeAccount;
+            localStorage.setItem('accountType', data.activeAccount);
             updateUserDisplay();
             toggleAccountMenu();
+            console.log(`Account switched to ${accountType}`);
         } else {
             console.error('Failed to switch account');
+            alert('Не удалось переключить аккаунт');
         }
     } catch (error) {
         console.error('Account switch error:', error);
+        alert('Ошибка при переключении аккаунта');
     }
 }
 
