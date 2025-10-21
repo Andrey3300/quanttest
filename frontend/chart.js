@@ -212,11 +212,7 @@ class ChartManager {
 
         this.animatingCandles.set(candleKey, animationData);
 
-        // Начальные значения для анимации хвостов
-        const bodyMax = Math.max(candle.open, candle.close);
-        const bodyMin = Math.min(candle.open, candle.close);
-        
-        // Функция анимации свечи (только хвосты high/low)
+        // Функция анимации свечи (только close движется, high/low фиксированы)
         const animateCandle = () => {
             const elapsed = Date.now() - animationData.startTime;
             const animDuration = 5000; // 5 секунд
@@ -248,30 +244,30 @@ class ChartManager {
             const progress = elapsed / animDuration;
             const final = animationData.finalCandle;
             
-            // Вычисляем текущие значения хвостов с колебаниями
             // Синусоидальное колебание с частотой ~3.33 раза в секунду (0.3 сек период)
             const oscillationPhase = Math.sin(elapsed / 300 * Math.PI * 2);
-            
-            // Расстояния для анимации
-            const highDistance = final.high - bodyMax;
-            const lowDistance = bodyMin - final.low;
             
             // Амплитуда колебания (уменьшается со временем)
             const oscillationAmplitude = 0.3 * (1 - progress);
             
-            // Плавный рост хвостов к финальным значениям
-            const easeProgress = 1 - Math.pow(1 - progress, 2); // easeOut
+            // Центр колебания - середина между open и final.close
+            const center = (final.open + final.close) / 2;
+            const range = Math.abs(final.close - final.open) / 2;
             
-            // Текущие значения с колебаниями
-            const currentHigh = bodyMax + highDistance * easeProgress * (1 + oscillationAmplitude * oscillationPhase);
-            const currentLow = bodyMin - lowDistance * easeProgress * (1 - oscillationAmplitude * oscillationPhase);
+            // Текущее значение close с колебаниями
+            // Плавно движется от open к final.close с колебаниями
+            const baseClose = final.open + (final.close - final.open) * progress;
+            const currentClose = baseClose + oscillationPhase * range * oscillationAmplitude;
+            
+            // Убедимся что close находится в пределах high/low
+            const clampedClose = Math.max(final.low, Math.min(final.high, currentClose));
             
             const currentCandle = {
                 time: final.time,
-                open: final.open,     // Тело свечи НЕ меняется
-                close: final.close,   // Тело свечи НЕ меняется
-                high: Math.max(currentHigh, bodyMax), // Хвост растёт вверх
-                low: Math.min(currentLow, bodyMin),   // Хвост растёт вниз
+                open: final.open,      // Open НЕ меняется
+                close: clampedClose,   // Close анимируется
+                high: final.high,      // High фиксирован
+                low: final.low,        // Low фиксирован
                 volume: final.volume
             };
 
@@ -283,8 +279,8 @@ class ChartManager {
                 color: currentCandle.close >= currentCandle.open ? '#26d07c80' : '#ff475780'
             });
 
-            // Обновляем цену в UI (используем финальную close, так как она не меняется)
-            this.updatePriceDisplay(final.close);
+            // Обновляем цену в UI
+            this.updatePriceDisplay(currentCandle.close);
         };
 
         // Запускаем анимацию каждые 0.3 секунды
