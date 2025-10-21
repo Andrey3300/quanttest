@@ -240,12 +240,15 @@ class ChartManager {
                 return;
             }
 
-            // Создаём плавное движение вверх-вниз
+            // Создаём плавное растягивание/сжатие свечи
             const progress = elapsed / animDuration;
             const final = animationData.finalCandle;
             
+            // Определяем направление свечи (зеленая или красная)
+            const isBullish = final.close >= final.open;
+            
             // Вычисляем амплитуду колебания (уменьшается со временем)
-            const amplitude = (final.high - final.low) * 0.3 * (1 - progress);
+            const amplitude = Math.abs(final.close - final.open) * 0.3 * (1 - progress);
             
             // Синусоидальное колебание с частотой ~3.33 раза в секунду (0.3 сек период)
             const oscillation = Math.sin(elapsed / 300 * Math.PI * 2) * amplitude;
@@ -253,11 +256,13 @@ class ChartManager {
             // Плавно переходим к финальным значениям
             const lerpFactor = progress * 0.7; // Постепенное схождение к финальным значениям
             
-            // Применяем колебание к телу свечи (open/close), а не к хвостам
+            // Open остается фиксированным, только close двигается
+            // Для зеленой свечи: close движется вверх от open
+            // Для красной свечи: close движется вниз от open
             const currentCandle = {
                 time: final.time,
-                open: final.open + oscillation,
-                close: final.close * (1 - lerpFactor) + final.close * lerpFactor + oscillation,
+                open: final.open, // Open всегда фиксирован
+                close: final.close * (1 - lerpFactor) + final.close * lerpFactor + (isBullish ? oscillation : -oscillation),
                 high: final.high,
                 low: final.low,
                 volume: final.volume
