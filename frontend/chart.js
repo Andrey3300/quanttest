@@ -212,7 +212,11 @@ class ChartManager {
 
         this.animatingCandles.set(candleKey, animationData);
 
-        // Функция анимации свечи
+        // Начальные значения для анимации хвостов
+        const bodyMax = Math.max(candle.open, candle.close);
+        const bodyMin = Math.min(candle.open, candle.close);
+        
+        // Функция анимации свечи (только хвосты high/low)
         const animateCandle = () => {
             const elapsed = Date.now() - animationData.startTime;
             const animDuration = 5000; // 5 секунд
@@ -240,31 +244,36 @@ class ChartManager {
                 return;
             }
 
-            // Создаём плавное движение вверх-вниз
+            // Прогресс анимации
             const progress = elapsed / animDuration;
             const final = animationData.finalCandle;
             
-            // Вычисляем амплитуду колебания (уменьшается со временем)
-            const amplitude = (final.high - final.low) * 0.3 * (1 - progress);
-            
+            // Вычисляем текущие значения хвостов с колебаниями
             // Синусоидальное колебание с частотой ~3.33 раза в секунду (0.3 сек период)
-            const oscillation = Math.sin(elapsed / 300 * Math.PI * 2) * amplitude;
+            const oscillationPhase = Math.sin(elapsed / 300 * Math.PI * 2);
             
-            // Плавно переходим к финальным значениям
-            const lerpFactor = progress * 0.7; // Постепенное схождение к финальным значениям
+            // Расстояния для анимации
+            const highDistance = final.high - bodyMax;
+            const lowDistance = bodyMin - final.low;
+            
+            // Амплитуда колебания (уменьшается со временем)
+            const oscillationAmplitude = 0.3 * (1 - progress);
+            
+            // Плавный рост хвостов к финальным значениям
+            const easeProgress = 1 - Math.pow(1 - progress, 2); // easeOut
+            
+            // Текущие значения с колебаниями
+            const currentHigh = bodyMax + highDistance * easeProgress * (1 + oscillationAmplitude * oscillationPhase);
+            const currentLow = bodyMin - lowDistance * easeProgress * (1 - oscillationAmplitude * oscillationPhase);
             
             const currentCandle = {
                 time: final.time,
-                open: final.open,
-                close: final.close * (1 - lerpFactor) + final.close * lerpFactor,
-                high: final.high + oscillation * (oscillation > 0 ? 1 : 0),
-                low: final.low + oscillation * (oscillation < 0 ? 1 : 0),
+                open: final.open,     // Тело свечи НЕ меняется
+                close: final.close,   // Тело свечи НЕ меняется
+                high: Math.max(currentHigh, bodyMax), // Хвост растёт вверх
+                low: Math.min(currentLow, bodyMin),   // Хвост растёт вниз
                 volume: final.volume
             };
-
-            // Убедимся что high >= max(open, close) и low <= min(open, close)
-            currentCandle.high = Math.max(currentCandle.high, currentCandle.open, currentCandle.close);
-            currentCandle.low = Math.min(currentCandle.low, currentCandle.open, currentCandle.close);
 
             // Обновляем свечу на графике
             this.candleSeries.update(currentCandle);
@@ -274,8 +283,8 @@ class ChartManager {
                 color: currentCandle.close >= currentCandle.open ? '#26d07c80' : '#ff475780'
             });
 
-            // Обновляем цену в UI
-            this.updatePriceDisplay(currentCandle.close);
+            // Обновляем цену в UI (используем финальную close, так как она не меняется)
+            this.updatePriceDisplay(final.close);
         };
 
         // Запускаем анимацию каждые 0.3 секунды
