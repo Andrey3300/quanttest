@@ -65,8 +65,8 @@ class ChartManager {
                 secondsVisible: true,
                 // Улучшенное управление масштабированием
                 rightOffset: 12,
-                barSpacing: 6,
-                minBarSpacing: 0.5,
+                barSpacing: 12,  // Увеличено с 6 до 12 для большего зазора между свечами
+                minBarSpacing: 3,  // Увеличено с 0.5 до 3 для минимального зазора
                 fixLeftEdge: false,
                 fixRightEdge: false,
                 // Автоматически прокручиваем к новым данным
@@ -370,7 +370,7 @@ class ChartManager {
         return start + (end - start) * t;
     }
 
-    // Анимация последней свечи (каждые 0.05 секунды для плавности)
+    // Анимация последней свечи (каждые 0.3 секунды как запрошено)
     startCandleAnimation() {
         // Останавливаем предыдущую анимацию
         if (this.animationInterval) {
@@ -431,7 +431,7 @@ class ChartManager {
             
             // Обновляем свечу на графике
             this.updateCandle(animatedCandle);
-        }, 50); // каждые 0.05 секунды (20 FPS) для более плавной анимации
+        }, 300); // каждые 0.3 секунды как запрошено пользователем
     }
 
     // Остановка анимации
