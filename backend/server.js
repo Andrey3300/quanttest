@@ -345,7 +345,30 @@ wss.on('connection', (ws, req) => {
   });
 });
 
-// Генерация и рассылка новых свечей каждые 5 секунд
+// Плавные обновления текущей свечи (тики) каждые 150ms
+setInterval(() => {
+  subscriptions.forEach((clients, symbol) => {
+    if (clients.size > 0) {
+      const generator = getGenerator(symbol);
+      const updatedCandle = generator.generateCandleTick();
+      
+      const message = JSON.stringify({
+        type: 'tick',
+        symbol,
+        data: updatedCandle
+      });
+      
+      // Отправляем всем подписанным клиентам
+      clients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(message);
+        }
+      });
+    }
+  });
+}, 150); // каждые 150ms для плавности
+
+// Создание новой свечи каждые 5 секунд
 setInterval(() => {
   subscriptions.forEach((clients, symbol) => {
     if (clients.size > 0) {
@@ -353,7 +376,7 @@ setInterval(() => {
       const newCandle = generator.generateNextCandle();
       
       const message = JSON.stringify({
-        type: 'candle',
+        type: 'newCandle',
         symbol,
         data: newCandle
       });
@@ -366,7 +389,7 @@ setInterval(() => {
       });
     }
   });
-}, 5000); // каждые 5 секунд
+}, 5000); // каждые 5 секунд фиксируем свечу и создаем новую
 
 server.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
