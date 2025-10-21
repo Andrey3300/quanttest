@@ -189,14 +189,14 @@ body {
 }
 
 .sidebar .logo {
-    font-size: 12px;
+    font-size: 20px;
     font-weight: bold;
     background: linear-gradient(135deg, var(--accent-green) 0%, var(--accent-blue) 100%);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     margin-bottom: 40px;
-    writing-mode: horizontal-tb;
-    transform: rotate(-90deg);
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
     white-space: nowrap;
 }
 
@@ -744,6 +744,39 @@ body {
 
 .auth-form.active {
     animation: fadeIn 0.3s ease-out;
+}
+
+/* Notification */
+.notification {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    padding: 16px 24px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    z-index: 10000;
+    opacity: 0;
+    transform: translateX(400px);
+    transition: all 0.3s ease;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+
+.notification.show {
+    opacity: 1;
+    transform: translateX(0);
+}
+
+.success-notification {
+    background: rgba(38, 208, 124, 0.2);
+    border: 1px solid var(--accent-green);
+    color: var(--accent-green);
+}
+
+.error-notification {
+    background: rgba(255, 71, 87, 0.2);
+    border: 1px solid var(--accent-red);
+    color: var(--accent-red);
 }
 
 /* Responsive */

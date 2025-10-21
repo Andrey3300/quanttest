@@ -339,15 +339,56 @@ async function selectAccount(accountType) {
             localStorage.setItem('accountType', data.activeAccount);
             updateUserDisplay();
             toggleAccountMenu();
-            console.log(`Account switched to ${accountType}`);
+            console.log(`Account switched to ${accountType}`, data);
+            showAccountSwitchSuccess(accountType);
         } else {
-            console.error('Failed to switch account');
-            alert('Не удалось переключить аккаунт');
+            const errorData = await response.json().catch(() => ({}));
+            console.error('Failed to switch account:', response.status, errorData);
+            showAccountSwitchError('Не удалось переключить аккаунт');
         }
     } catch (error) {
         console.error('Account switch error:', error);
-        alert('Ошибка при переключении аккаунта');
+        showAccountSwitchError('Ошибка при переключении аккаунта');
     }
+}
+
+// Показать успешное переключение аккаунта
+function showAccountSwitchSuccess(accountType) {
+    const message = accountType === 'demo' ? 'Переключено на демо аккаунт' : 'Переключено на реальный аккаунт';
+    const notification = document.createElement('div');
+    notification.className = 'notification success-notification';
+    notification.textContent = message;
+    document.body.appendChild(notification);
+    
+    setTimeout(() => {
+        notification.classList.add('show');
+    }, 10);
+    
+    setTimeout(() => {
+        notification.classList.remove('show');
+        setTimeout(() => {
+            document.body.removeChild(notification);
+        }, 300);
+    }, 3000);
+}
+
+// Показать ошибку переключения аккаунта
+function showAccountSwitchError(message) {
+    const notification = document.createElement('div');
+    notification.className = 'notification error-notification';
+    notification.textContent = message;
+    document.body.appendChild(notification);
+    
+    setTimeout(() => {
+        notification.classList.add('show');
+    }, 10);
+    
+    setTimeout(() => {
+        notification.classList.remove('show');
+        setTimeout(() => {
+            document.body.removeChild(notification);
+        }, 300);
+    }, 3000);
 }
 
 // Настройки свечей
