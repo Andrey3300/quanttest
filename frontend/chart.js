@@ -10,6 +10,7 @@ class ChartManager {
         this.symbol = 'USD_MXN_OTC';
         this.isInitialized = false;
         this.animatingCandles = new Map(); // Хранение состояния анимирующихся свечей
+        this.finalizedCandles = new Set(); // Хранение завершенных свечей для предотвращения повторной анимации
     }
 
     // Инициализация графика
@@ -194,6 +195,18 @@ class ChartManager {
 
         const candleKey = candle.time;
         
+        // Если свеча уже завершила анимацию, просто обновляем её без новой анимации
+        if (this.finalizedCandles.has(candleKey)) {
+            this.candleSeries.update(candle);
+            this.volumeSeries.update({
+                time: candle.time,
+                value: candle.volume,
+                color: candle.close >= candle.open ? '#26d07c80' : '#ff475780'
+            });
+            this.updatePriceDisplay(candle.close);
+            return;
+        }
+        
         // Если свеча уже анимируется, обновляем её финальные значения
         if (this.animatingCandles.has(candleKey)) {
             const animData = this.animatingCandles.get(candleKey);
@@ -234,6 +247,9 @@ class ChartManager {
                     clearTimeout(animationData.timeout);
                 }
                 this.animatingCandles.delete(candleKey);
+                
+                // Помечаем свечу как завершенную, чтобы предотвратить повторную анимацию
+                this.finalizedCandles.add(candleKey);
                 
                 // Обновляем цену в UI
                 this.updatePriceDisplay(animationData.finalCandle.close);
@@ -319,6 +335,9 @@ class ChartManager {
         // Останавливаем все анимации
         this.stopAllAnimations();
         
+        // Очищаем список завершенных свечей
+        this.finalizedCandles.clear();
+        
         // Закрываем старое WebSocket соединение
         if (this.ws) {
             this.ws.close();
@@ -360,6 +379,9 @@ class ChartManager {
         
         // Останавливаем все анимации
         this.stopAllAnimations();
+        
+        // Очищаем список завершенных свечей
+        this.finalizedCandles.clear();
         
         if (this.ws) {
             this.ws.close();
