@@ -212,7 +212,7 @@ class ChartManager {
 
         this.animatingCandles.set(candleKey, animationData);
 
-        // Функция анимации свечи
+        // Функция анимации свечи (только close движется, high/low фиксированы)
         const animateCandle = () => {
             const elapsed = Date.now() - animationData.startTime;
             const animDuration = 5000; // 5 секунд
@@ -240,31 +240,36 @@ class ChartManager {
                 return;
             }
 
-            // Создаём плавное движение вверх-вниз
+            // Прогресс анимации
             const progress = elapsed / animDuration;
             const final = animationData.finalCandle;
             
-            // Вычисляем амплитуду колебания (уменьшается со временем)
-            const amplitude = (final.high - final.low) * 0.3 * (1 - progress);
-            
             // Синусоидальное колебание с частотой ~3.33 раза в секунду (0.3 сек период)
-            const oscillation = Math.sin(elapsed / 300 * Math.PI * 2) * amplitude;
+            const oscillationPhase = Math.sin(elapsed / 300 * Math.PI * 2);
             
-            // Плавно переходим к финальным значениям
-            const lerpFactor = progress * 0.7; // Постепенное схождение к финальным значениям
+            // Амплитуда колебания (уменьшается со временем)
+            const oscillationAmplitude = 0.3 * (1 - progress);
+            
+            // Центр колебания - середина между open и final.close
+            const center = (final.open + final.close) / 2;
+            const range = Math.abs(final.close - final.open) / 2;
+            
+            // Текущее значение close с колебаниями
+            // Плавно движется от open к final.close с колебаниями
+            const baseClose = final.open + (final.close - final.open) * progress;
+            const currentClose = baseClose + oscillationPhase * range * oscillationAmplitude;
+            
+            // Убедимся что close находится в пределах high/low
+            const clampedClose = Math.max(final.low, Math.min(final.high, currentClose));
             
             const currentCandle = {
                 time: final.time,
-                open: final.open,
-                close: final.close * (1 - lerpFactor) + final.close * lerpFactor,
-                high: final.high + oscillation * (oscillation > 0 ? 1 : 0),
-                low: final.low + oscillation * (oscillation < 0 ? 1 : 0),
+                open: final.open,      // Open НЕ меняется
+                close: clampedClose,   // Close анимируется
+                high: final.high,      // High фиксирован
+                low: final.low,        // Low фиксирован
                 volume: final.volume
             };
-
-            // Убедимся что high >= max(open, close) и low <= min(open, close)
-            currentCandle.high = Math.max(currentCandle.high, currentCandle.open, currentCandle.close);
-            currentCandle.low = Math.min(currentCandle.low, currentCandle.open, currentCandle.close);
 
             // Обновляем свечу на графике
             this.candleSeries.update(currentCandle);
