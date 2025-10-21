@@ -68,8 +68,8 @@ class ChartManager {
                 // Автоматически прокручиваем к новым данным
                 lockVisibleTimeRangeOnResize: true,
                 rightBarStaysOnScroll: true,
-                // Сдвигаем видимый диапазон при появлении новых баров
-                shiftVisibleRangeOnNewBar: true,
+                // Не сдвигаем видимый диапазон при появлении новых баров (позволяет пользователю самому управлять позицией)
+                shiftVisibleRangeOnNewBar: false,
             },
         });
 
@@ -241,22 +241,14 @@ class ChartManager {
                         this.lastCandle = { ...message.data };
                         this.updateCandle(message.data);
                         
-                        // Если это новая свеча (не обновление существующей), прокручиваем к концу
-                        if (isNewCandle) {
-                            // Используем небольшую задержку для корректного отображения
-                            setTimeout(() => {
-                                if (this.chart) {
-                                    // Прокручиваем к самой правой позиции
-                                    this.chart.timeScale().scrollToPosition(0, false);
-                                    
-                                    // Принудительно обновляем масштаб цен
-                                    this.chart.applyOptions({
-                                        rightPriceScale: {
-                                            autoScale: true,
-                                        }
-                                    });
+                        // Не прокручиваем автоматически - пользователь сам управляет позицией графика
+                        // Только обновляем масштаб цен для корректного отображения новых данных
+                        if (isNewCandle && this.chart) {
+                            this.chart.applyOptions({
+                                rightPriceScale: {
+                                    autoScale: true,
                                 }
-                            }, 50);
+                            });
                         }
                     }
                 } catch (error) {
