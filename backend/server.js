@@ -8,6 +8,7 @@ const path = require('path');
 const WebSocket = require('ws');
 const http = require('http');
 const { getGenerator } = require('./chartGenerator');
+const logger = require('./errorLogger');
 require('dotenv').config();
 
 const app = express();
@@ -362,6 +363,10 @@ setInterval(() => {
       
       // Дополнительная проверка: убедимся что время - это число
       if (typeof updatedCandle.time !== 'number' || isNaN(updatedCandle.time)) {
+        logger.error('websocket', 'Invalid tick time format', { 
+          symbol: symbol,
+          candle: updatedCandle
+        });
         console.error('Invalid tick time format:', updatedCandle.time);
         return;
       }
@@ -394,6 +399,10 @@ setInterval(() => {
       
       // Проверка: убедимся что время - это число
       if (typeof newCandle.time !== 'number' || isNaN(newCandle.time)) {
+        logger.error('websocket', 'Invalid new candle time format', { 
+          symbol: symbol,
+          candle: newCandle
+        });
         console.error('Invalid new candle time format:', newCandle.time);
         return;
       }
@@ -411,6 +420,7 @@ setInterval(() => {
         }
       });
       
+      logger.logCandle('New candle sent to clients', symbol, newCandle);
       console.log(`New candle created for ${symbol} at time ${newCandle.time}`);
     }
   });

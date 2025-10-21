@@ -1,6 +1,8 @@
 // Chart data generator with Geometric Brownian Motion
 // Генератор свечных данных с геометрическим броуновским движением
 
+const logger = require('./errorLogger');
+
 class ChartGenerator {
     constructor(symbol, basePrice, volatility = 0.002, drift = 0.0, meanReversionSpeed = 0.05) {
         this.symbol = symbol;
@@ -125,6 +127,12 @@ class ChartGenerator {
             if (timestamp <= lastCandle.time) {
                 // Если время такое же или меньше, добавляем 1 секунду для избежания конфликта
                 timestamp = lastCandle.time + 1;
+                logger.warn('candle', 'Adjusted new candle timestamp to avoid conflict', { 
+                    symbol: this.symbol,
+                    original: Math.floor(now / 1000),
+                    adjusted: timestamp,
+                    lastTime: lastCandle.time
+                });
                 console.warn(`Adjusted new candle timestamp to avoid conflict: ${timestamp}`);
             }
         }
@@ -164,9 +172,16 @@ class ChartGenerator {
         
         // Финальная валидация перед возвратом
         if (typeof candle.time !== 'number' || isNaN(candle.time)) {
+            logger.error('candle', 'Invalid new candle time detected', { 
+                symbol: this.symbol,
+                candle: candle
+            });
             console.error('Invalid new candle time:', candle);
             candle.time = Math.floor(Date.now() / 1000);
         }
+        
+        // Логируем создание новой свечи
+        logger.logCandle('New candle', this.symbol, candle);
         
         return candle;
     }
@@ -267,6 +282,11 @@ class ChartGenerator {
             typeof tickCandle.high !== 'number' || isNaN(tickCandle.high) ||
             typeof tickCandle.low !== 'number' || isNaN(tickCandle.low) ||
             typeof tickCandle.close !== 'number' || isNaN(tickCandle.close)) {
+            logger.error('candle', 'Invalid tick candle data detected', { 
+                symbol: this.symbol,
+                tickCandle: tickCandle,
+                currentState: this.currentCandleState
+            });
             console.error('Invalid tick candle data:', tickCandle);
             // Возвращаем безопасную копию без NaN
             return {
