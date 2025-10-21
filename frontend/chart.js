@@ -153,9 +153,24 @@ class ChartManager {
             }, 200);
         });
         
-        // РЕШЕНИЕ #7: Защита от схлопывания графика через мониторинг диапазона
+        // УСИЛЕННАЯ ЗАЩИТА ОТ СХЛОПЫВАНИЯ графика через мониторинг диапазона
         this.chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
             if (!range || this.isRestoringRange || !this.isInitialized) return;
+            
+            // УЛУЧШЕНИЕ: Дополнительная проверка на корректность диапазона
+            if (range.from < 0 || range.to < 0 || range.from >= range.to) {
+                window.errorLogger?.error('range', 'Invalid range detected!', {
+                    range: range,
+                    candleCount: this.candleCount
+                });
+                console.error('Invalid range detected:', range);
+                this.isRestoringRange = true;
+                setTimeout(() => {
+                    this.chart.timeScale().fitContent();
+                    this.isRestoringRange = false;
+                }, 50);
+                return;
+            }
             
             // Проверяем на схлопывание
             const visibleBars = range.to - range.from;
@@ -167,25 +182,52 @@ class ChartManager {
                     currentRange: { from: range.from, to: range.to },
                     visibleBars: visibleBars,
                     pureVisibleBars: pureVisibleBars,
-                    minRequired: this.MIN_VISIBLE_BARS
+                    minRequired: this.MIN_VISIBLE_BARS,
+                    candleCount: this.candleCount
                 });
                 console.error('Chart collapse detected! Range too narrow:', pureVisibleBars, 'bars');
                 
-                // Восстанавливаем безопасный диапазон
+                // УЛУЧШЕНИЕ: Используем candleCount для безопасного восстановления
                 const safeVisibleBars = 100; // отображаем последние 100 свечей
+                
+                // Проверяем что у нас достаточно свечей
+                if (this.candleCount < safeVisibleBars) {
+                    window.errorLogger?.warn('range', 'Not enough candles for safe range, using fitContent', {
+                        candleCount: this.candleCount,
+                        safeVisibleBars: safeVisibleBars
+                    });
+                    this.isRestoringRange = true;
+                    setTimeout(() => {
+                        this.chart.timeScale().fitContent();
+                        this.isRestoringRange = false;
+                    }, 50);
+                    return;
+                }
+                
                 const safeRange = {
                     from: Math.max(0, this.candleCount - safeVisibleBars),
-                    to: Math.max(safeVisibleBars, this.candleCount - 1 + rightOffsetBars)
+                    to: this.candleCount - 1 + rightOffsetBars
                 };
                 
-                window.errorLogger?.info('range', 'Restoring safe range', { safeRange });
+                window.errorLogger?.info('range', 'Restoring safe range', { 
+                    safeRange,
+                    candleCount: this.candleCount
+                });
                 
                 // Устанавливаем флаг чтобы избежать рекурсии
                 this.isRestoringRange = true;
                 
                 // Применяем с небольшой задержкой
                 setTimeout(() => {
-                    this.chart.timeScale().setVisibleLogicalRange(safeRange);
+                    try {
+                        this.chart.timeScale().setVisibleLogicalRange(safeRange);
+                    } catch (error) {
+                        window.errorLogger?.error('range', 'Failed to restore range', {
+                            error: error.message,
+                            safeRange: safeRange
+                        });
+                        console.error('Failed to restore range:', error);
+                    }
                     setTimeout(() => {
                         this.isRestoringRange = false;
                     }, 100);
@@ -277,6 +319,12 @@ class ChartManager {
             : `ws://${window.location.host}/ws/chart`;
 
         try {
+            // ЗАЩИТА: Закрываем старое соединение если оно есть
+            if (this.ws && this.ws.readyState !== WebSocket.CLOSED) {
+                this.ws.close();
+                this.ws = null;
+            }
+            
             this.ws = new WebSocket(wsUrl);
 
             this.ws.onopen = () => {
@@ -504,25 +552,31 @@ class ChartManager {
                             });
                             
                             if (isNearEnd) {
-                                // ЗАЩИТА #3: Проверяем разумность candleCount
-                                // Если candleCount резко изменился - это ошибка, игнорируем
-                                if (this.candleCount < 1000) {
-                                    window.errorLogger?.error('range', 'candleCount too low - skipping scroll', {
-                                        candleCount: this.candleCount,
-                                        lastCandleTime: this.lastCandle?.time
-                                    });
-                                    console.error('candleCount suspiciously low:', this.candleCount, '- skipping scroll');
-                                    return;
-                                }
+                                // ИСПРАВЛЕНИЕ: Убрана проверка candleCount < 1000
+                                // Эта проверка была слишком строгой и блокировала работу
+                                // Теперь мы гарантируем корректность candleCount через другие механизмы
+                                
+                                // УЛУЧШЕННАЯ ЛОГИКА АВТОСКРОЛЛА:
                                 
                                 // 1. Вычисляем "чистую" ширину видимых свечей БЕЗ rightOffset
                                 const totalWidth = currentRange.to - currentRange.from;
                                 const pureVisibleBars = Math.max(this.MIN_VISIBLE_BARS, Math.floor(totalWidth - rightOffsetBars));
                                 
-                                // 2. Используем candleCount для расчета (уже проверен выше)
+                                // 2. Используем candleCount для расчета
                                 const safeLastCandleIndex = this.candleCount - 1;
                                 
-                                // 3. Рассчитываем новый from относительно последней реальной свечи
+                                // 3. КРИТИЧЕСКАЯ ПРОВЕРКА: убедимся что candleCount достаточно большой
+                                if (safeLastCandleIndex < pureVisibleBars) {
+                                    window.errorLogger?.warn('range', 'Not enough candles for scroll calculation', {
+                                        candleCount: this.candleCount,
+                                        pureVisibleBars: pureVisibleBars,
+                                        lastCandleIndex: safeLastCandleIndex
+                                    });
+                                    console.warn('Not enough candles for scroll:', this.candleCount, 'needed:', pureVisibleBars);
+                                    return;
+                                }
+                                
+                                // 4. Рассчитываем новый диапазон
                                 const newFrom = Math.max(0, safeLastCandleIndex - pureVisibleBars);
                                 const newTo = safeLastCandleIndex + rightOffsetBars;
                                 
@@ -640,9 +694,10 @@ class ChartManager {
     async changeSymbol(newSymbol) {
         this.symbol = newSymbol;
         
-        // Закрываем старое WebSocket соединение
+        // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Закрываем WebSocket СРАЗУ чтобы не получать старые тики
         if (this.ws) {
             this.ws.close();
+            this.ws = null;
         }
 
         // Очищаем график и сбрасываем счетчики
@@ -657,13 +712,21 @@ class ChartManager {
         this.candleCount = 0;
         this.lastCandle = null;
 
-        // Загружаем новые данные
+        // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Сначала загружаем данные, ПОТОМ подключаем WebSocket
+        // Это гарантирует что candleCount установлен корректно ДО первых тиков
         await this.loadHistoricalData(newSymbol);
+        
+        // Небольшая задержка для гарантии что backend тоже инициализировал генератор
+        await new Promise(resolve => setTimeout(resolve, 100));
 
-        // Подключаемся к новому WebSocket
+        // Только теперь подключаемся к WebSocket
         this.connectWebSocket(newSymbol);
         
-        console.log(`Chart switched to ${newSymbol}`);
+        window.errorLogger?.info('chart', 'Chart switched successfully', { 
+            symbol: newSymbol,
+            candleCount: this.candleCount 
+        });
+        console.log(`Chart switched to ${newSymbol} with ${this.candleCount} candles`);
     }
 
     // Очистка ресурсов

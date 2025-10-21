@@ -359,6 +359,13 @@ setInterval(() => {
   subscriptions.forEach((clients, symbol) => {
     if (clients.size > 0) {
       const generator = getGenerator(symbol);
+      
+      // ЗАЩИТА: Проверяем что генератор инициализирован с данными
+      if (!generator.candles || generator.candles.length === 0) {
+        logger.warn('websocket', 'Generator not initialized, skipping tick', { symbol });
+        return;
+      }
+      
       const updatedCandle = generator.generateCandleTick();
       
       // Дополнительная проверка: убедимся что время - это число
@@ -402,6 +409,13 @@ setInterval(() => {
   subscriptions.forEach((clients, symbol) => {
     if (clients.size > 0) {
       const generator = getGenerator(symbol);
+      
+      // ЗАЩИТА: Проверяем что генератор инициализирован с данными
+      if (!generator.candles || generator.candles.length === 0) {
+        logger.warn('websocket', 'Generator not initialized, skipping new candle', { symbol });
+        return;
+      }
+      
       const newCandle = generator.generateNextCandle();
       
       // Проверка: убедимся что время - это число
