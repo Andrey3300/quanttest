@@ -133,7 +133,12 @@
             <!-- Верхняя панель -->
             <header class="top-bar">
                 <div class="asset-selector">
-                    <span class="asset-name">USD/MXN OTC</span>
+                    <button class="asset-dropdown-btn" onclick="toggleAssetDropdown()">
+                        <span class="asset-name" id="selected-asset">USD/MXN OTC</span>
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M7 10l5 5 5-5z"/>
+                        </svg>
+                    </button>
                     <button class="candle-settings-btn" onclick="toggleCandleSettings()">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
@@ -141,6 +146,58 @@
                             <line x1="15" y1="9" x2="15" y2="15"/>
                         </svg>
                     </button>
+                    
+                    <!-- Asset Dropdown Menu -->
+                    <div id="asset-dropdown" class="asset-dropdown" style="display: none;">
+                        <div class="asset-categories">
+                            <button class="category-btn active" onclick="showAssetCategory('currencies')">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10"/>
+                                    <text x="12" y="16" text-anchor="middle" font-size="10" fill="currentColor">$</text>
+                                </svg>
+                                <span>Currencies</span>
+                            </button>
+                            <button class="category-btn" onclick="showAssetCategory('cryptocurrencies')">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/>
+                                    <text x="12" y="15" text-anchor="middle" font-size="8" fill="currentColor">₿</text>
+                                </svg>
+                                <span>Cryptocurrencies</span>
+                            </button>
+                            <button class="category-btn" onclick="showAssetCategory('commodities')">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+                                    <path d="M2 17l10 5 10-5"/>
+                                    <path d="M2 12l10 5 10-5"/>
+                                </svg>
+                                <span>Commodities</span>
+                            </button>
+                            <button class="category-btn" onclick="showAssetCategory('favorites')">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2">
+                                    <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+                                </svg>
+                                <span>Favorites</span>
+                            </button>
+                        </div>
+                        
+                        <div class="asset-search">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="11" cy="11" r="8"/>
+                                <path d="m21 21-4.35-4.35"/>
+                            </svg>
+                            <input type="text" id="asset-search-input" placeholder="Search" onkeyup="filterAssets()">
+                        </div>
+                        
+                        <div class="asset-list-container">
+                            <div class="asset-list-header">
+                                <span>Asset</span>
+                                <span>Payout</span>
+                            </div>
+                            <div id="asset-list" class="asset-list">
+                                <!-- Assets will be populated by JavaScript -->
+                            </div>
+                        </div>
+                    </div>
                 </div>
                 <div class="user-info">
                     <div class="balance-display" onclick="toggleAccountMenu()">

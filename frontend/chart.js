@@ -6,7 +6,7 @@ class ChartManager {
         this.chart = null;
         this.candleSeries = null;
         this.ws = null;
-        this.symbol = 'USD_MXN';
+        this.symbol = 'USD_MXN_OTC';
         this.isInitialized = false;
         this.lastCandle = null;
         this.animationInterval = null;
@@ -251,9 +251,17 @@ class ChartManager {
     async changeSymbol(newSymbol) {
         this.symbol = newSymbol;
         
+        // Останавливаем анимацию старого символа
+        this.stopCandleAnimation();
+        
         // Закрываем старое WebSocket соединение
         if (this.ws) {
             this.ws.close();
+        }
+
+        // Очищаем график
+        if (this.candleSeries) {
+            this.candleSeries.setData([]);
         }
 
         // Загружаем новые данные
@@ -261,6 +269,8 @@ class ChartManager {
 
         // Подключаемся к новому WebSocket
         this.connectWebSocket(newSymbol);
+        
+        console.log(`Chart switched to ${newSymbol}`);
     }
 
     // Очистка ресурсов
