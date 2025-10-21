@@ -44,6 +44,12 @@ class ChartManager {
             },
             rightPriceScale: {
                 borderColor: '#2d3748',
+                autoScale: true, // Автоматическое масштабирование
+                scaleMargins: {
+                    top: 0.1, // 10% отступ сверху
+                    bottom: 0.1, // 10% отступ снизу
+                },
+                mode: LightweightCharts.PriceScaleMode.Normal,
             },
             timeScale: {
                 borderColor: '#2d3748',
@@ -51,6 +57,8 @@ class ChartManager {
                 secondsVisible: true,
                 barSpacing: 8, // Делаем свечи толще
                 minBarSpacing: 4, // Минимальная толщина при максимальном отдалении
+                rightOffset: 12, // Отступ справа для последней свечи
+                lockVisibleTimeRangeOnResize: true,
             },
         });
 
@@ -64,6 +72,11 @@ class ChartManager {
             wickDownColor: '#ff4757',
             priceLineVisible: true,
             lastValueVisible: true,
+            priceFormat: {
+                type: 'price',
+                precision: 4,
+                minMove: 0.0001,
+            },
         });
 
         // Создаем серию объемов (скрыта)
@@ -161,8 +174,17 @@ class ChartManager {
             }));
             this.volumeSeries.setData(volumeData);
 
-            // Автоматически подгоняем видимый диапазон
+            // Автоматически подгоняем видимый диапазон только при первой загрузке
             this.chart.timeScale().fitContent();
+            
+            // Устанавливаем начальный видимый диапазон (последние ~100 свечей)
+            if (data.length > 0) {
+                const visibleLogicalRange = {
+                    from: Math.max(0, data.length - 100),
+                    to: data.length + 10
+                };
+                this.chart.timeScale().setVisibleLogicalRange(visibleLogicalRange);
+            }
 
             console.log(`Loaded ${data.length} candles for ${symbol}`);
         } catch (error) {
@@ -240,7 +262,17 @@ class ChartManager {
             return;
         }
         
-        // Троттлинг обновлений - не чаще чем каждые 50ms
+        // Валидация OHLC - критически важно!
+        if (candle.high < candle.low || 
+            candle.high < candle.open || 
+            candle.high < candle.close ||
+            candle.low > candle.open ||
+            candle.low > candle.close) {
+            console.error('Invalid OHLC data:', candle);
+            return;
+        }
+        
+        // Троттлинг обновлений - не чаще чем каждые 50ms (только для тиков)
         const now = Date.now();
         if (!isNewCandle && (now - this.lastUpdateTime) < this.updateThrottle) {
             return;
@@ -258,9 +290,35 @@ class ChartManager {
         // Обновляем цену в UI
         this.updatePriceDisplay(candle.close);
         
-        // Если это новая свеча, логируем
+        // Если это новая свеча, прокручиваем к ней если пользователь не взаимодействует
         if (isNewCandle) {
-            console.log('New candle created:', candle.time);
+            console.log('New candle created:', candle.time, 'open:', candle.open, 'close:', candle.close);
+            
+            // Плавно прокручиваем к последней свече только если пользователь не взаимодействует
+            if (!this.isUserInteracting) {
+                try {
+                    const timeScale = this.chart.timeScale();
+                    const currentRange = timeScale.getVisibleLogicalRange();
+                    if (currentRange) {
+                        // Проверяем, находимся ли мы близко к концу графика
+                        const candleData = this.candleSeries.data();
+                        if (candleData && candleData.length > 0) {
+                            const totalCandles = candleData.length;
+                            const visibleDistance = currentRange.to - currentRange.from;
+                            
+                            // Если мы близко к концу (в пределах 20 свечей), прокручиваем
+                            if (currentRange.to >= totalCandles - 20) {
+                                timeScale.setVisibleLogicalRange({
+                                    from: currentRange.from + 1,
+                                    to: currentRange.to + 1
+                                });
+                            }
+                        }
+                    }
+                } catch (error) {
+                    // Игнорируем ошибки прокрутки
+                }
+            }
         }
     }
 
