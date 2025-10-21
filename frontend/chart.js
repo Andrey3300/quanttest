@@ -12,6 +12,8 @@ class ChartManager {
         this.isUserInteracting = false; // флаг взаимодействия пользователя
         this.lastUpdateTime = 0; // время последнего обновления
         this.updateThrottle = 50; // минимальный интервал между обновлениями (ms)
+        this.lastCandle = null; // последняя свеча для отслеживания
+        this.candleCount = 0; // количество свечей для корректного расчета индексов
     }
 
     // Инициализация графика
@@ -164,6 +166,12 @@ class ChartManager {
 
             // Устанавливаем данные свечей
             this.candleSeries.setData(data);
+            
+            // Сохраняем количество свечей и последнюю свечу
+            this.candleCount = data.length;
+            if (data.length > 0) {
+                this.lastCandle = data[data.length - 1];
+            }
 
             // Устанавливаем данные объемов
             const volumeData = data.map(candle => ({
@@ -291,35 +299,49 @@ class ChartManager {
         // Обновляем цену в UI
         this.updatePriceDisplay(candle.close);
         
-        // Если это новая свеча, прокручиваем к ней если пользователь не взаимодействует
+        // Если это новая свеча, обновляем счетчик и прокручиваем график
         if (isNewCandle) {
             console.log('New candle created:', candle.time, 'open:', candle.open, 'close:', candle.close);
+            
+            // Увеличиваем счетчик свечей
+            this.candleCount++;
+            this.lastCandle = candle;
             
             // Плавно прокручиваем к последней свече только если пользователь не взаимодействует
             if (!this.isUserInteracting) {
                 try {
                     const timeScale = this.chart.timeScale();
                     const currentRange = timeScale.getVisibleLogicalRange();
+                    
                     if (currentRange) {
+                        const rightOffsetBars = 12; // фиксированный отступ справа из настроек
+                        
                         // Проверяем, находимся ли мы близко к концу графика
-                        const candleData = this.candleSeries.data();
-                        if (candleData && candleData.length > 0) {
-                            const totalCandles = candleData.length;
-                            const rightOffsetBars = 12; // фиксированный отступ справа
+                        // Если текущий диапазон включает последние свечи (в пределах 5 свечей от конца)
+                        const isNearEnd = currentRange.to >= (this.candleCount - 1 - 5);
+                        
+                        if (isNearEnd) {
+                            // Вычисляем ширину видимого диапазона в свечах
+                            const rangeWidth = currentRange.to - currentRange.from;
                             
-                            // Если мы близко к концу (в пределах 20 свечей), прокручиваем
-                            // Проверяем по реальному индексу последней свечи (totalCandles - 1)
-                            if (currentRange.to >= totalCandles - 2 + rightOffsetBars - 20) {
-                                // Используем scrollToPosition для плавной прокрутки без изменения масштаба
-                                // Прокручиваем на 1 свечу вправо
-                                timeScale.scrollToPosition(1, false);
-                            }
+                            // Создаем новый диапазон, сохраняя ту же ширину
+                            // Новая последняя свеча имеет индекс this.candleCount - 1
+                            const newRange = {
+                                from: this.candleCount - 1 + rightOffsetBars - rangeWidth,
+                                to: this.candleCount - 1 + rightOffsetBars
+                            };
+                            
+                            // Устанавливаем новый диапазон БЕЗ анимации для плавного обновления
+                            timeScale.setVisibleLogicalRange(newRange);
                         }
                     }
                 } catch (error) {
-                    // Игнорируем ошибки прокрутки
+                    console.error('Error scrolling chart:', error);
                 }
             }
+        } else {
+            // Для обновления текущей свечи (тик) просто обновляем lastCandle
+            this.lastCandle = candle;
         }
     }
 
@@ -353,13 +375,17 @@ class ChartManager {
             this.ws.close();
         }
 
-        // Очищаем график
+        // Очищаем график и сбрасываем счетчики
         if (this.candleSeries) {
             this.candleSeries.setData([]);
         }
         if (this.volumeSeries) {
             this.volumeSeries.setData([]);
         }
+        
+        // Сбрасываем счетчики и последнюю свечу
+        this.candleCount = 0;
+        this.lastCandle = null;
 
         // Загружаем новые данные
         await this.loadHistoricalData(newSymbol);
