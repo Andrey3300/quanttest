@@ -350,17 +350,19 @@ class ChartManager {
                         const rightOffsetBars = 12; // фиксированный отступ справа из настроек
                         
                         // Проверяем, находимся ли мы близко к концу графика
-                        // Если текущий диапазон включает последние свечи (в пределах 5 свечей от конца)
-                        const isNearEnd = currentRange.to >= (this.candleCount - 1 - 5);
+                        // Используем индекс последней свечи ПЕРЕД увеличением счётчика
+                        const previousLastIndex = this.candleCount - 2;
+                        const isNearEnd = currentRange.to >= (previousLastIndex - 5);
                         
                         if (isNearEnd) {
-                            // Вычисляем ширину видимого диапазона в свечах
-                            const rangeWidth = currentRange.to - currentRange.from;
+                            // ИСПРАВЛЕНИЕ: Вычисляем ширину ТОЛЬКО видимых свечей (без rightOffset)
+                            // currentRange.to уже включает rightOffset, поэтому вычитаем его
+                            const visibleBarsWidth = currentRange.to - currentRange.from - rightOffsetBars;
                             
-                            // Создаем новый диапазон, сохраняя ту же ширину
+                            // Создаем новый диапазон, сохраняя ту же ширину видимых свечей
                             // Новая последняя свеча имеет индекс this.candleCount - 1
                             const newRange = {
-                                from: this.candleCount - 1 + rightOffsetBars - rangeWidth,
+                                from: this.candleCount - 1 - visibleBarsWidth,
                                 to: this.candleCount - 1 + rightOffsetBars
                             };
                             
