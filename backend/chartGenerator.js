@@ -92,8 +92,14 @@ class ChartGenerator {
     generateHistoricalData(days = 7, intervalSeconds = 5) {
         const candles = [];
         const now = Date.now();
-        const startTime = now - (days * 24 * 60 * 60 * 1000); // 7 дней назад
-        const totalCandles = Math.floor((now - startTime) / (intervalSeconds * 1000));
+        
+        // ВАЖНО: Выравниваем текущее время по сетке intervalSeconds
+        const currentTimeSeconds = Math.floor(now / 1000);
+        const alignedCurrentTime = Math.floor(currentTimeSeconds / intervalSeconds) * intervalSeconds;
+        const alignedNow = alignedCurrentTime * 1000;
+        
+        const startTime = alignedNow - (days * 24 * 60 * 60 * 1000); // 7 дней назад
+        const totalCandles = Math.floor((alignedNow - startTime) / (intervalSeconds * 1000));
         
         let currentPrice = this.basePrice;
         
@@ -107,6 +113,14 @@ class ChartGenerator {
         this.candles = candles;
         this.currentPrice = currentPrice;
         
+        logger.info('historical', 'Historical data generated', {
+            symbol: this.symbol,
+            totalCandles: candles.length,
+            lastCandleTime: candles[candles.length - 1]?.time,
+            alignedCurrentTime: alignedCurrentTime,
+            intervalSeconds: intervalSeconds
+        });
+        
         return candles;
     }
 
@@ -114,26 +128,29 @@ class ChartGenerator {
     generateNextCandle() {
         const now = Date.now();
         const precision = this.getPricePrecision(this.basePrice);
+        const intervalSeconds = 5; // интервал свечи
         
         // Новая свеча ВСЕГДА начинается с цены закрытия предыдущей свечи
         const openPrice = this.currentPrice;
         
-        // Вычисляем timestamp в секундах (для lightweight-charts)
-        let timestamp = Math.floor(now / 1000);
+        // КРИТИЧНО: Выравниваем timestamp по сетке 5 секунд
+        const currentTimeSeconds = Math.floor(now / 1000);
+        let timestamp = Math.floor(currentTimeSeconds / intervalSeconds) * intervalSeconds;
         
         // ВАЖНО: Проверяем что новая свеча не старше последней
         if (this.candles.length > 0) {
             const lastCandle = this.candles[this.candles.length - 1];
             if (timestamp <= lastCandle.time) {
-                // Если время такое же или меньше, добавляем 1 секунду для избежания конфликта
-                timestamp = lastCandle.time + 1;
-                logger.warn('candle', 'Adjusted new candle timestamp to avoid conflict', { 
+                // Если время такое же или меньше, добавляем интервал (5 секунд)
+                timestamp = lastCandle.time + intervalSeconds;
+                logger.warn('candle', 'Adjusted new candle timestamp to next interval', { 
                     symbol: this.symbol,
-                    original: Math.floor(now / 1000),
+                    original: Math.floor(currentTimeSeconds / intervalSeconds) * intervalSeconds,
                     adjusted: timestamp,
-                    lastTime: lastCandle.time
+                    lastTime: lastCandle.time,
+                    intervalSeconds: intervalSeconds
                 });
-                console.warn(`Adjusted new candle timestamp to avoid conflict: ${timestamp}`);
+                console.warn(`Adjusted new candle timestamp to next interval: ${timestamp}`);
             }
         }
         
