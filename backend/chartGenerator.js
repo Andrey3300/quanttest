@@ -471,12 +471,24 @@ function getGenerator(symbol) {
         };
         
         const symbolConfig = config[symbol] || { basePrice: 100, volatility: 0.002, drift: 0.0 };
-        generators.set(symbol, new ChartGenerator(
+        const generator = new ChartGenerator(
             symbol,
             symbolConfig.basePrice,
             symbolConfig.volatility,
             symbolConfig.drift
-        ));
+        );
+        
+        // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Сразу генерируем исторические данные
+        // Это гарантирует что генератор инициализирован ДО первых тиков
+        generator.generateHistoricalData();
+        
+        logger.info('generator', 'New generator created and initialized', {
+            symbol: symbol,
+            candleCount: generator.candles.length,
+            basePrice: symbolConfig.basePrice
+        });
+        
+        generators.set(symbol, generator);
     }
     return generators.get(symbol);
 }
