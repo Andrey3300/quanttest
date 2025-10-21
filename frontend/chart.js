@@ -253,12 +253,13 @@ class ChartManager {
             // Плавно переходим к финальным значениям
             const lerpFactor = progress * 0.7; // Постепенное схождение к финальным значениям
             
+            // Применяем колебание к телу свечи (open/close), а не к хвостам
             const currentCandle = {
                 time: final.time,
-                open: final.open,
-                close: final.close * (1 - lerpFactor) + final.close * lerpFactor,
-                high: final.high + oscillation * (oscillation > 0 ? 1 : 0),
-                low: final.low + oscillation * (oscillation < 0 ? 1 : 0),
+                open: final.open + oscillation,
+                close: final.close * (1 - lerpFactor) + final.close * lerpFactor + oscillation,
+                high: final.high,
+                low: final.low,
                 volume: final.volume
             };
 
