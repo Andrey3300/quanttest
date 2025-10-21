@@ -20,10 +20,17 @@ class ChartManager {
             return;
         }
 
+        // Получаем родительский контейнер для правильного расчета размеров
+        const parentContainer = chartContainer.parentElement;
+        const width = parentContainer ? parentContainer.clientWidth : chartContainer.clientWidth;
+        const height = parentContainer ? parentContainer.clientHeight : chartContainer.clientHeight;
+
+        console.log(`Initializing chart with dimensions: ${width}x${height}`);
+
         // Создаем график с темной темой
         this.chart = LightweightCharts.createChart(chartContainer, {
-            width: chartContainer.clientWidth,
-            height: chartContainer.clientHeight,
+            width: width,
+            height: height,
             layout: {
                 background: { color: '#1a1f2e' },
                 textColor: '#a0aec0',
@@ -58,9 +65,13 @@ class ChartManager {
         // Обработка изменения размера окна
         window.addEventListener('resize', () => {
             if (this.chart && chartContainer) {
+                const parentContainer = chartContainer.parentElement;
+                const width = parentContainer ? parentContainer.clientWidth : chartContainer.clientWidth;
+                const height = parentContainer ? parentContainer.clientHeight : chartContainer.clientHeight;
+                
                 this.chart.applyOptions({
-                    width: chartContainer.clientWidth,
-                    height: chartContainer.clientHeight,
+                    width: width,
+                    height: height,
                 });
             }
         });
