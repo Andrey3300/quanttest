@@ -113,12 +113,29 @@ class ChartGenerator {
         this.candles = candles;
         this.currentPrice = currentPrice;
         
+        // Инициализируем currentCandleState для последней свечи
+        if (candles.length > 0) {
+            const lastCandle = candles[candles.length - 1];
+            this.currentCandleState = {
+                time: lastCandle.time,
+                open: lastCandle.open,
+                high: lastCandle.high,
+                low: lastCandle.low,
+                close: lastCandle.close,
+                volume: lastCandle.volume,
+                targetClose: lastCandle.close,
+                targetHigh: lastCandle.high,
+                targetLow: lastCandle.low
+            };
+        }
+        
         logger.info('historical', 'Historical data generated', {
             symbol: this.symbol,
             totalCandles: candles.length,
             lastCandleTime: candles[candles.length - 1]?.time,
             alignedCurrentTime: alignedCurrentTime,
-            intervalSeconds: intervalSeconds
+            intervalSeconds: intervalSeconds,
+            currentCandleStateInitialized: !!this.currentCandleState
         });
         
         return candles;
@@ -222,6 +239,31 @@ class ChartGenerator {
         if (!this.currentCandleState) {
             // Если свечи нет, создаем начальную
             return this.generateNextCandle();
+        }
+        
+        // ЗАЩИТА: Проверяем что currentCandleState синхронизирован с последней свечой
+        if (this.candles.length > 0) {
+            const lastCandle = this.candles[this.candles.length - 1];
+            if (this.currentCandleState.time !== lastCandle.time) {
+                logger.warn('candle', 'currentCandleState out of sync - resetting', {
+                    symbol: this.symbol,
+                    currentStateTime: this.currentCandleState.time,
+                    lastCandleTime: lastCandle.time,
+                    timeDiff: lastCandle.time - this.currentCandleState.time
+                });
+                // Пересинхронизируем с последней свечой
+                this.currentCandleState = {
+                    time: lastCandle.time,
+                    open: lastCandle.open,
+                    high: lastCandle.high,
+                    low: lastCandle.low,
+                    close: lastCandle.close,
+                    volume: lastCandle.volume,
+                    targetClose: lastCandle.close,
+                    targetHigh: lastCandle.high,
+                    targetLow: lastCandle.low
+                };
+            }
         }
         
         const precision = this.getPricePrecision(this.basePrice);

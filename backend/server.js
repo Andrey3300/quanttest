@@ -455,10 +455,14 @@ setInterval(() => {
     }
   });
   
-  // РЕШЕНИЕ #4: Увеличиваем задержку с 200ms до 500ms для стабильной обработки
+  // РЕШЕНИЕ #4: Увеличиваем задержку с 200ms до 1000ms для стабильной обработки
+  // Это гарантирует что клиенты получат и обработают новую свечу до следующих тиков
   setTimeout(() => {
     isCreatingNewCandle = false;
-  }, 500);
+    logger.debug('websocket', 'Tick generation unlocked after new candles', {
+      elapsedTime: Date.now() - startTime
+    });
+  }, 1000);
 }, 5000); // каждые 5 секунд фиксируем свечу и создаем новую
 
 server.listen(PORT, () => {

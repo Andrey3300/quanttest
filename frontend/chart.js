@@ -371,7 +371,12 @@ class ChartManager {
             if (!isNewCandle) {
                 // Для тиков: проверяем что обновляем текущую свечу, а не старую
                 if (candle.time < this.lastCandle.time) {
-                    console.warn('Ignoring outdated tick - candle time:', candle.time, 'last candle time:', this.lastCandle.time);
+                    // Игнорируем устаревшие тики (это нормальное поведение после создания новой свечи)
+                    window.errorLogger?.debug('chart', 'Ignoring outdated tick', {
+                        tickTime: candle.time,
+                        lastCandleTime: this.lastCandle.time,
+                        timeDiff: this.lastCandle.time - candle.time
+                    });
                     return;
                 }
                 // УЛУЧШЕНИЕ: Если тик пришел с новым временем - обрабатываем как новую свечу
@@ -386,14 +391,15 @@ class ChartManager {
                 }
                 // Если candle.time === this.lastCandle.time - это нормальное обновление текущей свечи
             } else {
-                // Для новых свечей: время должно быть больше или равно времени последней свечи
-                if (candle.time < this.lastCandle.time) {
-                    window.errorLogger?.error('chart', 'REJECTED: New candle has older timestamp', {
+                // Для новых свечей: время должно быть строго больше времени последней свечи
+                if (candle.time <= this.lastCandle.time) {
+                    window.errorLogger?.warn('chart', 'REJECTED: New candle has older or equal timestamp', {
                         candleTime: candle.time,
                         lastTime: this.lastCandle.time,
-                        candleCount: this.candleCount
+                        candleCount: this.candleCount,
+                        timeDiff: candle.time - this.lastCandle.time
                     });
-                    console.error('New candle has older timestamp - candle:', candle.time, 'last:', this.lastCandle.time);
+                    console.warn('New candle has older or equal timestamp - candle:', candle.time, 'last:', this.lastCandle.time);
                     return;
                 }
             }
