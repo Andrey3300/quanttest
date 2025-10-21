@@ -179,9 +179,11 @@ class ChartManager {
             
             // Устанавливаем начальный видимый диапазон (последние ~100 свечей)
             if (data.length > 0) {
+                // Используем фиксированный отступ справа (rightOffset из настроек)
+                const rightOffsetBars = 12; // соответствует rightOffset в настройках
                 const visibleLogicalRange = {
                     from: Math.max(0, data.length - 100),
-                    to: data.length + 10
+                    to: data.length - 1 + rightOffsetBars
                 };
                 this.chart.timeScale().setVisibleLogicalRange(visibleLogicalRange);
             }
@@ -305,12 +307,15 @@ class ChartManager {
                         if (candleData && candleData.length > 0) {
                             const totalCandles = candleData.length;
                             const visibleDistance = currentRange.to - currentRange.from;
+                            const rightOffsetBars = 12; // фиксированный отступ справа
                             
                             // Если мы близко к концу (в пределах 20 свечей), прокручиваем
-                            if (currentRange.to >= totalCandles - 20) {
+                            // Проверяем по реальному индексу последней свечи (totalCandles - 1)
+                            if (currentRange.to >= totalCandles - 1 + rightOffsetBars - 20) {
+                                // Устанавливаем новый диапазон с фиксированным отступом справа
                                 timeScale.setVisibleLogicalRange({
                                     from: currentRange.from + 1,
-                                    to: currentRange.to + 1
+                                    to: totalCandles - 1 + rightOffsetBars
                                 });
                             }
                         }
