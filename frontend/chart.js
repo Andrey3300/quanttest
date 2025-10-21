@@ -291,16 +291,31 @@ class ChartManager {
                     } else if (message.type === 'candle') {
                         // Получили новую свечу с сервера (каждые 5 секунд)
                         const isNewCandle = !this.lastCandle || this.lastCandle.time !== message.data.time;
-                        this.lastCandle = {
-                            time: message.data.time,
-                            open: message.data.open,
-                            high: message.data.high,
-                            low: message.data.low,
-                            close: message.data.close
-                        };
                         
                         // Если это новая свеча (новый таймфрейм), сразу устанавливаем её без интерполяции
                         if (isNewCandle) {
+                            console.log('New candle received:', message.data.time);
+                            
+                            // КРИТИЧНО: Останавливаем анимацию перед обновлением данных свечи
+                            // Это предотвращает конфликты между старой и новой свечой
+                            const wasAnimating = this.animationInterval !== null;
+                            if (wasAnimating) {
+                                this.stopCandleAnimation();
+                            }
+                            
+                            // Сохраняем новую свечу
+                            this.lastCandle = {
+                                time: message.data.time,
+                                open: message.data.open,
+                                high: message.data.high,
+                                low: message.data.low,
+                                close: message.data.close
+                            };
+                            
+                            // Обновляем свечу на графике НЕМЕДЛЕННО
+                            this.updateCandleImmediate(message.data);
+                            
+                            // Устанавливаем текущую и целевую свечи для новой анимации
                             this.currentCandle = {
                                 time: message.data.time,
                                 open: message.data.open,
@@ -315,16 +330,10 @@ class ChartManager {
                                 low: message.data.low,
                                 close: message.data.close
                             };
-                            this.updateCandleImmediate(message.data);
                             
-                            // КРИТИЧНО: После фиксации свечи принудительно обновляем масштаб графика
-                            // Это исправляет проблему с отображением, когда новые свечи появляются "в воздухе"
+                            // Принудительно обновляем масштаб графика
                             setTimeout(() => {
                                 if (this.chart && this.candleSeries) {
-                                    // Получаем все данные серии для правильного расчета масштаба
-                                    const timeScale = this.chart.timeScale();
-                                    const visibleRange = timeScale.getVisibleLogicalRange();
-                                    
                                     // Принудительно пересчитываем масштаб цен
                                     this.chart.applyOptions({
                                         rightPriceScale: {
@@ -336,14 +345,28 @@ class ChartManager {
                                         }
                                     });
                                     
-                                    // Если пользователь смотрит на правый край графика, подстраиваем видимый диапазон
-                                    if (visibleRange && visibleRange.to !== null && visibleRange.to !== undefined) {
-                                        const barsCount = Math.floor(visibleRange.to - visibleRange.from);
-                                        timeScale.scrollToPosition(3, false); // Небольшой отступ справа
-                                    }
+                                    // Прокручиваем к последней свече если нужно
+                                    const timeScale = this.chart.timeScale();
+                                    timeScale.scrollToRealTime();
                                 }
-                            }, 50);
+                            }, 100);
+                            
+                            // Перезапускаем анимацию после небольшой задержки
+                            if (wasAnimating) {
+                                setTimeout(() => {
+                                    this.startCandleAnimation();
+                                }, 150);
+                            }
                         } else {
+                            // Обновляем данные текущей свечи
+                            this.lastCandle = {
+                                time: message.data.time,
+                                open: message.data.open,
+                                high: message.data.high,
+                                low: message.data.low,
+                                close: message.data.close
+                            };
+                            
                             // Устанавливаем целевую свечу для плавной интерполяции
                             this.setTargetCandle(message.data);
                         }
@@ -390,6 +413,13 @@ class ChartManager {
                 close: candle.close
             };
         } else {
+            // КРИТИЧНО: Проверяем что мы обновляем ту же свечу (по времени)
+            // Если время изменилось, это новая свеча и этот метод не должен использоваться
+            if (this.targetCandle.time !== candle.time) {
+                console.warn('Attempted to update target candle with different time, ignoring');
+                return;
+            }
+            
             // Обновляем только целевую свечу, интерполяция произойдет в анимации
             this.targetCandle = {
                 time: candle.time,
@@ -498,6 +528,14 @@ class ChartManager {
         // Запускаем новую анимацию
         this.animationInterval = setInterval(() => {
             if (!this.currentCandle || !this.targetCandle || !this.candleSeries) {
+                return;
+            }
+            
+            // КРИТИЧНО: Проверяем что время свечи совпадает
+            // Если время изменилось, это значит что пришла новая свеча и анимация должна быть остановлена
+            if (this.currentCandle.time !== this.targetCandle.time) {
+                console.warn('Time mismatch in animation, stopping');
+                this.stopCandleAnimation();
                 return;
             }
 
