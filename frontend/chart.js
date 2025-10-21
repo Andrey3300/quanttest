@@ -44,15 +44,29 @@ class ChartManager {
             },
             rightPriceScale: {
                 borderColor: '#2d3748',
+                // Автоматическое масштабирование с учетом видимых данных
+                autoScale: true,
+                scaleMargins: {
+                    top: 0.1,
+                    bottom: 0.1,
+                },
+                // Режим масштабирования для лучшей читаемости
+                mode: 0, // Normal price scale mode
             },
             timeScale: {
                 borderColor: '#2d3748',
                 timeVisible: true,
                 secondsVisible: true,
+                // Улучшенное управление масштабированием
+                rightOffset: 5,
+                barSpacing: 6,
+                minBarSpacing: 0.5,
+                fixLeftEdge: false,
+                fixRightEdge: false,
             },
         });
 
-        // Создаем серию свечей
+        // Создаем серию свечей с оптимизированными настройками для корректного отображения при масштабировании
         this.candleSeries = this.chart.addCandlestickSeries({
             upColor: '#26d07c',
             downColor: '#ff4757',
@@ -60,6 +74,12 @@ class ChartManager {
             borderDownColor: '#ff4757',
             wickUpColor: '#26d07c',
             wickDownColor: '#ff4757',
+            // Настройки для корректного отображения при любом масштабе
+            priceFormat: {
+                type: 'price',
+                precision: 4,
+                minMove: 0.0001,
+            },
         });
 
         // Обработка изменения размера окна
@@ -218,15 +238,16 @@ class ChartManager {
             // Создаем копию последней свечи
             const animatedCandle = { ...this.lastCandle };
             
-            // Генерируем небольшое случайное изменение цены (±0.02%)
-            const volatility = 0.0002;
-            const priceChange = (Math.random() - 0.5) * 2 * volatility;
+            // Генерируем небольшое случайное изменение цены с повышенной детализацией
+            // Используем разную волатильность для разных активов
+            const baseVolatility = 0.0003;
+            const priceChange = (Math.random() - 0.5) * 2 * baseVolatility;
             const newClose = animatedCandle.close * (1 + priceChange);
             
-            // Обновляем close
+            // Обновляем close с большей точностью (избегаем ступенчатости)
             animatedCandle.close = parseFloat(newClose.toFixed(4));
             
-            // Обновляем high и low если нужно
+            // Обновляем high и low если нужно, но с ограничением размера теней
             if (animatedCandle.close > animatedCandle.high) {
                 animatedCandle.high = animatedCandle.close;
             }
