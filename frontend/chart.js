@@ -10,6 +10,10 @@ class ChartManager {
         this.isInitialized = false;
         this.lastCandle = null;
         this.animationInterval = null;
+        // Для плавной интерполяции свечей
+        this.currentCandle = null; // текущее отображаемое состояние
+        this.targetCandle = null;  // целевое состояние к которому движемся
+        this.interpolationSpeed = 0.15; // скорость интерполяции (0.15 = 15% за шаг)
     }
 
     // Инициализация графика
@@ -186,6 +190,8 @@ class ChartManager {
             // Сохраняем последнюю свечу для анимации
             if (data.length > 0) {
                 this.lastCandle = { ...data[data.length - 1] };
+                this.currentCandle = { ...data[data.length - 1] };
+                this.targetCandle = { ...data[data.length - 1] };
             }
 
             // Автоматически подгоняем видимый диапазон
@@ -239,7 +245,14 @@ class ChartManager {
                         // Получили новую свечу с сервера (каждые 5 секунд)
                         const isNewCandle = !this.lastCandle || this.lastCandle.time !== message.data.time;
                         this.lastCandle = { ...message.data };
-                        this.updateCandle(message.data);
+                        // Устанавливаем целевую свечу для плавной интерполяции
+                        this.setTargetCandle(message.data);
+                        // Если это новая свеча (новый таймфрейм), сразу устанавливаем её без интерполяции
+                        if (isNewCandle) {
+                            this.currentCandle = { ...message.data };
+                            this.targetCandle = { ...message.data };
+                            this.updateCandleImmediate(message.data);
+                        }
                         
                         // Не прокручиваем автоматически - пользователь сам управляет позицией графика
                         // Только обновляем масштаб цен для корректного отображения новых данных
@@ -275,7 +288,30 @@ class ChartManager {
         }
     }
 
-    // Обновление свечи
+    // Установка целевой свечи для плавной интерполяции
+    setTargetCandle(candle) {
+        if (!this.targetCandle) {
+            this.targetCandle = { ...candle };
+            this.currentCandle = { ...candle };
+        } else {
+            // Обновляем только целевую свечу, интерполяция произойдет в анимации
+            this.targetCandle = { ...candle };
+        }
+    }
+
+    // Немедленное обновление свечи (без интерполяции)
+    updateCandleImmediate(candle) {
+        if (!this.candleSeries) {
+            return;
+        }
+
+        // Обновляем свечу
+        this.candleSeries.update(candle);
+
+        this.updatePriceDisplay(candle);
+    }
+
+    // Обновление свечи с текущим интерполированным состоянием
     updateCandle(candle) {
         if (!this.candleSeries) {
             return;
@@ -284,7 +320,12 @@ class ChartManager {
         // Обновляем свечу
         this.candleSeries.update(candle);
 
-        // Обновляем текущую цену в интерфейсе
+        this.updatePriceDisplay(candle);
+    }
+
+    // Обновление отображения цены в интерфейсе
+    updatePriceDisplay(candle) {
+
         const priceEl = document.getElementById('current-price');
         if (priceEl) {
             // Определяем точность отображения
@@ -324,7 +365,12 @@ class ChartManager {
         return 0.0010;  // Для маленьких цен
     }
 
-    // Анимация последней свечи (каждые 0.3 секунды)
+    // Линейная интерполяция между двумя значениями
+    lerp(start, end, t) {
+        return start + (end - start) * t;
+    }
+
+    // Анимация последней свечи (каждые 0.05 секунды для плавности)
     startCandleAnimation() {
         // Останавливаем предыдущую анимацию
         if (this.animationInterval) {
@@ -333,32 +379,49 @@ class ChartManager {
 
         // Запускаем новую анимацию
         this.animationInterval = setInterval(() => {
-            if (!this.lastCandle || !this.candleSeries) {
+            if (!this.currentCandle || !this.targetCandle || !this.candleSeries) {
                 return;
             }
 
-            // Создаем копию последней свечи
-            const animatedCandle = { ...this.lastCandle };
-            
-            // Генерируем небольшое случайное изменение цены с повышенной детализацией
-            // Используем разную волатильность для разных активов
-            const baseVolatility = this.getAnimationVolatility(animatedCandle.close);
-            const priceChange = (Math.random() - 0.5) * 2 * baseVolatility;
-            const newClose = animatedCandle.close * (1 + priceChange);
-            
             // Определяем точность на основе цены
             let precision = 4;
-            if (animatedCandle.close >= 1000) precision = 2;
-            else if (animatedCandle.close >= 100) precision = 3;
-            else if (animatedCandle.close >= 0.1) precision = 4;
-            else if (animatedCandle.close >= 0.01) precision = 5;
-            else if (animatedCandle.close >= 0.001) precision = 6;
+            if (this.currentCandle.close >= 1000) precision = 2;
+            else if (this.currentCandle.close >= 100) precision = 3;
+            else if (this.currentCandle.close >= 0.1) precision = 4;
+            else if (this.currentCandle.close >= 0.01) precision = 5;
+            else if (this.currentCandle.close >= 0.001) precision = 6;
             else precision = 8;
+
+            // Плавно интерполируем текущую свечу к целевой
+            const animatedCandle = { ...this.currentCandle };
             
-            // Обновляем close с правильной точностью (избегаем ступенчатости)
-            animatedCandle.close = parseFloat(newClose.toFixed(precision));
+            // Интерполируем все значения OHLC
+            animatedCandle.open = this.lerp(this.currentCandle.open, this.targetCandle.open, this.interpolationSpeed);
+            animatedCandle.high = this.lerp(this.currentCandle.high, this.targetCandle.high, this.interpolationSpeed);
+            animatedCandle.low = this.lerp(this.currentCandle.low, this.targetCandle.low, this.interpolationSpeed);
+            animatedCandle.close = this.lerp(this.currentCandle.close, this.targetCandle.close, this.interpolationSpeed);
             
-            // Обновляем high и low если нужно, но с ограничением размера теней
+            // Применяем точность
+            animatedCandle.open = parseFloat(animatedCandle.open.toFixed(precision));
+            animatedCandle.high = parseFloat(animatedCandle.high.toFixed(precision));
+            animatedCandle.low = parseFloat(animatedCandle.low.toFixed(precision));
+            animatedCandle.close = parseFloat(animatedCandle.close.toFixed(precision));
+            
+            // Убеждаемся что high - самое высокое, а low - самое низкое
+            const allPrices = [animatedCandle.open, animatedCandle.close];
+            animatedCandle.high = Math.max(animatedCandle.high, ...allPrices);
+            animatedCandle.low = Math.min(animatedCandle.low, ...allPrices);
+            
+            // Обновляем текущую свечу для следующей итерации
+            this.currentCandle = { ...animatedCandle };
+            
+            // Добавляем небольшую микро-анимацию только к close (очень маленькую)
+            const baseVolatility = this.getAnimationVolatility(animatedCandle.close);
+            const microChange = (Math.random() - 0.5) * 2 * baseVolatility * 0.3; // 30% от обычной волатильности
+            const microClose = animatedCandle.close * (1 + microChange);
+            animatedCandle.close = parseFloat(microClose.toFixed(precision));
+            
+            // Обновляем high и low если микро-изменение вышло за пределы
             if (animatedCandle.close > animatedCandle.high) {
                 animatedCandle.high = animatedCandle.close;
             }
@@ -368,7 +431,7 @@ class ChartManager {
             
             // Обновляем свечу на графике
             this.updateCandle(animatedCandle);
-        }, 300); // каждые 0.3 секунды
+        }, 50); // каждые 0.05 секунды (20 FPS) для более плавной анимации
     }
 
     // Остановка анимации
