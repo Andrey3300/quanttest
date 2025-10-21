@@ -14,6 +14,11 @@ class ChartManager {
         this.updateThrottle = 150; // минимальный интервал между обновлениями (ms) - увеличено в 3 раза
         this.lastCandle = null; // последняя свеча для отслеживания
         this.candleCount = 0; // количество свечей для корректного расчета индексов
+        this.isDestroyed = false; // флаг уничтожения для предотвращения переподключения
+        this.reconnectTimer = null; // таймер переподключения для очистки
+        this.connectionId = 0; // уникальный ID соединения для отслеживания
+        this.processedCandles = new Set(); // сет для отслеживания обработанных свечей
+        this.MAX_CANDLES_IN_MEMORY = 120960; // максимально 7 дней по 5-секундных свечей
         
         // РЕШЕНИЕ #6: Debounce для скролла
         this.scrollDebounceTimer = null;
@@ -272,6 +277,9 @@ class ChartManager {
             if (data.length > 0) {
                 this.lastCandle = data[data.length - 1];
             }
+            
+            // Очищаем сет обработанных свечей при загрузке новых данных
+            this.processedCandles.clear();
 
             // Устанавливаем данные объемов
             const volumeData = data.map(candle => ({
@@ -319,13 +327,27 @@ class ChartManager {
             : `ws://${window.location.host}/ws/chart`;
 
         try {
-            // ЗАЩИТА: Закрываем старое соединение если оно есть
-            if (this.ws && this.ws.readyState !== WebSocket.CLOSED) {
-                this.ws.close();
-                this.ws = null;
+            // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Полная очистка старого соединения
+            this.closeWebSocket();
+            
+            // Отменяем любые pending переподключения
+            if (this.reconnectTimer) {
+                clearTimeout(this.reconnectTimer);
+                this.reconnectTimer = null;
             }
             
+            // Увеличиваем ID соединения для отслеживания
+            this.connectionId++;
+            const currentConnectionId = this.connectionId;
+            
             this.ws = new WebSocket(wsUrl);
+            
+            window.errorLogger?.info('websocket', 'Creating new WebSocket connection', { 
+                symbol,
+                wsUrl,
+                connectionId: currentConnectionId,
+                readyState: this.ws.readyState 
+            });
 
             this.ws.onopen = () => {
                 window.errorLogger?.info('websocket', 'WebSocket connected', { symbol });
@@ -339,21 +361,56 @@ class ChartManager {
 
             this.ws.onmessage = (event) => {
                 try {
+                    // ЗАЩИТА: Игнорируем сообщения от устаревших соединений
+                    if (currentConnectionId !== this.connectionId) {
+                        window.errorLogger?.warn('websocket', 'Ignoring message from old connection', {
+                            messageConnectionId: currentConnectionId,
+                            currentConnectionId: this.connectionId
+                        });
+                        return;
+                    }
+                    
                     const message = JSON.parse(event.data);
 
                     if (message.type === 'subscribed') {
                         console.log(`Subscribed to ${message.symbol}`);
+                        window.errorLogger?.info('websocket', 'Subscription confirmed', { 
+                            symbol: message.symbol,
+                            connectionId: currentConnectionId
+                        });
                     } else if (message.type === 'tick') {
-                        // Плавное обновление текущей свечи
+                        // Плавное обновление текущей свечи (не проверяем дубликаты для тиков)
                         this.updateCandle(message.data, false);
                     } else if (message.type === 'newCandle') {
                         // Создание новой свечи
+                        // ЗАЩИТА: Проверяем что эту свечу еще не обрабатывали
+                        const candleKey = `${message.data.time}-${message.symbol || this.symbol}`;
+                        if (this.processedCandles.has(candleKey)) {
+                            window.errorLogger?.warn('websocket', 'Duplicate new candle detected - skipping', {
+                                candleKey,
+                                time: message.data.time
+                            });
+                            return;
+                        }
+                        this.processedCandles.add(candleKey);
+                        
+                        // Ограничиваем размер Set для предотвращения утечки памяти
+                        if (this.processedCandles.size > 10000) {
+                            // Очищаем старые записи
+                            const entries = Array.from(this.processedCandles);
+                            this.processedCandles = new Set(entries.slice(-5000));
+                        }
+                        
                         this.updateCandle(message.data, true);
                     } else if (message.type === 'candle') {
                         // Обратная совместимость
                         this.updateCandle(message.data, false);
                     }
                 } catch (error) {
+                    window.errorLogger?.error('websocket', 'Error processing WebSocket message', {
+                        error: error.message,
+                        stack: error.stack
+                    });
                     console.error('Error processing WebSocket message:', error);
                 }
             };
@@ -366,15 +423,33 @@ class ChartManager {
                 console.error('WebSocket error:', error);
             };
 
-            this.ws.onclose = () => {
+            this.ws.onclose = (event) => {
+                window.errorLogger?.info('websocket', 'WebSocket closed', { 
+                    symbol,
+                    code: event.code,
+                    reason: event.reason,
+                    wasClean: event.wasClean,
+                    isDestroyed: this.isDestroyed
+                });
                 console.log('WebSocket disconnected');
-                // Переподключаемся через 5 секунд
-                setTimeout(() => {
-                    if (this.isInitialized) {
-                        console.log('Reconnecting WebSocket...');
-                        this.connectWebSocket(symbol);
-                    }
-                }, 5000);
+                
+                // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: НЕ переподключаемся если компонент уничтожен
+                // или если соединение закрыто намеренно (например, при смене символа)
+                if (this.isDestroyed || !this.isInitialized) {
+                    window.errorLogger?.info('websocket', 'Not reconnecting - component destroyed or not initialized');
+                    return;
+                }
+                
+                // Переподключаемся только если это неожиданное отключение
+                if (event.code !== 1000) { // 1000 = нормальное закрытие
+                    window.errorLogger?.info('websocket', 'Scheduling reconnect after abnormal close');
+                    this.reconnectTimer = setTimeout(() => {
+                        if (this.isInitialized && !this.isDestroyed) {
+                            console.log('Reconnecting WebSocket...');
+                            this.connectWebSocket(this.symbol); // используем текущий символ
+                        }
+                    }, 5000);
+                }
             };
         } catch (error) {
             window.errorLogger?.error('websocket', 'Error connecting to WebSocket', {
@@ -491,6 +566,47 @@ class ChartManager {
                     newCandleCount: this.candleCount,
                     candleTime: candle.time
                 });
+                
+                // КРИТИЧЕСКАЯ ЗАЩИТА: Ограничиваем количество свечей в памяти
+                if (this.candleCount > this.MAX_CANDLES_IN_MEMORY) {
+                    window.errorLogger?.warn('chart', 'Memory limit reached - cleaning old candles', {
+                        currentCount: this.candleCount,
+                        maxAllowed: this.MAX_CANDLES_IN_MEMORY
+                    });
+                    
+                    // Получаем все свечи из серии
+                    const allCandles = this.candleSeries.data();
+                    
+                    if (allCandles && allCandles.length > 0) {
+                        // Оставляем только последние MAX_CANDLES_IN_MEMORY свечей
+                        const candlesToKeep = Math.floor(this.MAX_CANDLES_IN_MEMORY * 0.75); // 75% для запаса
+                        const trimmedCandles = allCandles.slice(-candlesToKeep);
+                        
+                        window.errorLogger?.info('chart', 'Trimming candle data', {
+                            before: allCandles.length,
+                            after: trimmedCandles.length,
+                            removed: allCandles.length - trimmedCandles.length
+                        });
+                        
+                        // Применяем обрезанные данные
+                        this.candleSeries.setData(trimmedCandles);
+                        
+                        // Обновляем счетчик
+                        this.candleCount = trimmedCandles.length;
+                        
+                        // Обновляем последнюю свечу
+                        if (trimmedCandles.length > 0) {
+                            this.lastCandle = trimmedCandles[trimmedCandles.length - 1];
+                        }
+                        
+                        // Также обрезаем объемы
+                        const allVolumes = this.volumeSeries.data();
+                        if (allVolumes && allVolumes.length > 0) {
+                            const trimmedVolumes = allVolumes.slice(-candlesToKeep);
+                            this.volumeSeries.setData(trimmedVolumes);
+                        }
+                    }
+                }
             }
             
             this.volumeSeries.update({
@@ -692,12 +808,20 @@ class ChartManager {
 
     // Смена символа
     async changeSymbol(newSymbol) {
+        window.errorLogger?.info('chart', 'Changing symbol', { 
+            from: this.symbol, 
+            to: newSymbol 
+        });
+        
         this.symbol = newSymbol;
         
-        // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Закрываем WebSocket СРАЗУ чтобы не получать старые тики
-        if (this.ws) {
-            this.ws.close();
-            this.ws = null;
+        // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Полностью очищаем WebSocket соединение
+        this.closeWebSocket();
+        
+        // Отменяем любые pending переподключения от предыдущего символа
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
         }
 
         // Очищаем график и сбрасываем счетчики
@@ -711,6 +835,9 @@ class ChartManager {
         // Сбрасываем счетчики и последнюю свечу
         this.candleCount = 0;
         this.lastCandle = null;
+        
+        // Очищаем сет обработанных свечей
+        this.processedCandles.clear();
 
         // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Сначала загружаем данные, ПОТОМ подключаем WebSocket
         // Это гарантирует что candleCount установлен корректно ДО первых тиков
@@ -729,14 +856,50 @@ class ChartManager {
         console.log(`Chart switched to ${newSymbol} with ${this.candleCount} candles`);
     }
 
-    // Очистка ресурсов
-    destroy() {
-        this.isInitialized = false;
-        
+    // Полная очистка WebSocket соединения
+    closeWebSocket() {
         if (this.ws) {
-            this.ws.close();
+            const currentState = this.ws.readyState;
+            
+            // Удаляем все обработчики событий чтобы предотвратить утечки и повторные подключения
+            this.ws.onopen = null;
+            this.ws.onmessage = null;
+            this.ws.onerror = null;
+            this.ws.onclose = null;
+            
+            // Закрываем соединение если оно не закрыто
+            if (currentState === WebSocket.OPEN || currentState === WebSocket.CONNECTING) {
+                this.ws.close(1000, 'Intentional close'); // 1000 = нормальное закрытие
+            }
+            
+            window.errorLogger?.info('websocket', 'WebSocket cleaned up', { 
+                previousState: currentState
+            });
+            
             this.ws = null;
         }
+    }
+
+    // Очистка ресурсов
+    destroy() {
+        window.errorLogger?.info('chart', 'Destroying chart manager');
+        
+        this.isDestroyed = true;
+        this.isInitialized = false;
+        
+        // Отменяем все таймеры
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
+        
+        if (this.scrollDebounceTimer) {
+            clearTimeout(this.scrollDebounceTimer);
+            this.scrollDebounceTimer = null;
+        }
+        
+        // Полностью очищаем WebSocket
+        this.closeWebSocket();
 
         if (this.chart) {
             this.chart.remove();
@@ -750,3 +913,64 @@ class ChartManager {
 
 // Глобальный экземпляр менеджера графика
 window.chartManager = new ChartManager();
+
+// Диагностический инструмент для отладки
+window.chartDiagnostics = {
+    getStatus: function() {
+        const cm = window.chartManager;
+        const status = {
+            isInitialized: cm.isInitialized,
+            isDestroyed: cm.isDestroyed,
+            symbol: cm.symbol,
+            candleCount: cm.candleCount,
+            connectionId: cm.connectionId,
+            websocket: {
+                exists: !!cm.ws,
+                readyState: cm.ws ? cm.ws.readyState : null,
+                readyStateText: cm.ws ? ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'][cm.ws.readyState] : null,
+                url: cm.ws ? cm.ws.url : null
+            },
+            processedCandlesCount: cm.processedCandles.size,
+            lastCandle: cm.lastCandle ? {
+                time: cm.lastCandle.time,
+                timeISO: new Date(cm.lastCandle.time * 1000).toISOString(),
+                close: cm.lastCandle.close
+            } : null,
+            memory: window.performance && window.performance.memory ? {
+                totalJSHeapSize: window.performance.memory.totalJSHeapSize,
+                usedJSHeapSize: window.performance.memory.usedJSHeapSize,
+                jsHeapSizeLimit: window.performance.memory.jsHeapSizeLimit,
+                usedPercentage: ((window.performance.memory.usedJSHeapSize / window.performance.memory.jsHeapSizeLimit) * 100).toFixed(2) + '%'
+            } : 'Not available'
+        };
+        console.table([status]);
+        return status;
+    },
+    
+    // Непрерывный мониторинг
+    startMonitoring: function(intervalSeconds = 10) {
+        if (this.monitoringInterval) {
+            console.log('Monitoring already running. Stop it first with stopMonitoring()');
+            return;
+        }
+        
+        console.log(`Starting monitoring every ${intervalSeconds} seconds...`);
+        this.monitoringInterval = setInterval(() => {
+            const status = this.getStatus();
+            console.log(`[${new Date().toISOString()}] Candles: ${status.candleCount}, WS: ${status.websocket.readyStateText}, Memory: ${status.memory?.usedPercentage || 'N/A'}`);
+        }, intervalSeconds * 1000);
+    },
+    
+    stopMonitoring: function() {
+        if (this.monitoringInterval) {
+            clearInterval(this.monitoringInterval);
+            this.monitoringInterval = null;
+            console.log('Monitoring stopped');
+        }
+    }
+};
+
+console.log('📊 Chart diagnostics available:');
+console.log('  • chartDiagnostics.getStatus() - получить текущий статус');
+console.log('  • chartDiagnostics.startMonitoring(10) - начать мониторинг каждые 10 секунд');
+console.log('  • chartDiagnostics.stopMonitoring() - остановить мониторинг');
