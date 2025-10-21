@@ -44,20 +44,31 @@ class ChartGenerator {
         return newPrice;
     }
 
+    // Определение точности цены на основе базовой цены
+    getPricePrecision(price) {
+        if (price >= 1000) return 2;      // Например BTC: 68750.23
+        if (price >= 100) return 3;       // Например ETH: 3450.123
+        if (price >= 10) return 4;        // Например USD/MXN: 18.9167
+        if (price >= 1) return 4;         // Например EUR/USD: 1.0850
+        if (price >= 0.1) return 5;       // Например DOGE: 0.14523
+        if (price >= 0.01) return 6;      // Например маленькие пары
+        return 8;                          // Для очень маленьких цен
+    }
+
     // Генерация одной свечи с реалистичным OHLC
     generateCandle(timestamp, openPrice) {
         const close = this.generateNextPrice(openPrice);
         
         // Генерируем high и low с КОРОТКИМИ хвостами как в PocketOption
         // Уменьшаем внутри-свечную волатильность для коротких теней
-        const intraVolatility = this.volatility * 0.3; // гораздо меньше для коротких хвостов
+        const intraVolatility = this.volatility * 0.4; // немного увеличено для лучшей вариативности
         
         // High должен быть выше open и close, но ненамного (короткий хвост)
         const maxPrice = Math.max(openPrice, close);
         const wickUpSize = Math.abs(this.randomNormal(0, intraVolatility));
-        // Ограничиваем максимальный размер хвоста до 50% от размера тела свечи
+        // Ограничиваем максимальный размер хвоста до 60% от размера тела свечи
         const bodySize = Math.abs(close - openPrice);
-        const maxWickSize = Math.max(bodySize * 0.5, maxPrice * 0.0005); // минимум 0.05%
+        const maxWickSize = Math.max(bodySize * 0.6, maxPrice * 0.0008); // немного увеличено
         const limitedWickUp = Math.min(wickUpSize * maxPrice, maxWickSize);
         const high = maxPrice + limitedWickUp;
         
@@ -72,12 +83,15 @@ class ChartGenerator {
         const volumeVariance = 0.5;
         const volume = Math.floor(baseVolume * (1 + this.randomNormal(0, volumeVariance)));
         
+        // Определяем точность для этого актива
+        const precision = this.getPricePrecision(this.basePrice);
+        
         return {
             time: Math.floor(timestamp / 1000), // время в секундах для lightweight-charts
-            open: parseFloat(openPrice.toFixed(4)),
-            high: parseFloat(high.toFixed(4)),
-            low: parseFloat(low.toFixed(4)),
-            close: parseFloat(close.toFixed(4)),
+            open: parseFloat(openPrice.toFixed(precision)),
+            high: parseFloat(high.toFixed(precision)),
+            low: parseFloat(low.toFixed(precision)),
+            close: parseFloat(close.toFixed(precision)),
             volume: Math.max(1000, volume)
         };
     }
@@ -158,7 +172,7 @@ function getGenerator(symbol) {
             'EUR_CHF_OTC2': { basePrice: 0.9425, volatility: 0.0029, drift: -0.0001 },
             'KES_USD_OTC': { basePrice: 0.0077, volatility: 0.0038, drift: 0.0001 },
             'TND_USD_OTC': { basePrice: 0.3190, volatility: 0.0033, drift: -0.0001 },
-            'UAH_USD_OTC': { basePrice: 0.0244, volatility: 0.0042, drift: 0.0002 },
+            'UAH_USD_OTC': { basePrice: 68623.2282, volatility: 0.0042, drift: 0.0002 },
             'USD_BDT_OTC': { basePrice: 0.0092, volatility: 0.0036, drift: 0.0001 },
             'USD_CNH_OTC': { basePrice: 7.2450, volatility: 0.0033, drift: -0.0001 },
             'USD_IDR_OTC': { basePrice: 15850, volatility: 0.0036, drift: 0.0003 },
@@ -187,22 +201,22 @@ function getGenerator(symbol) {
             'GBP_CHF': { basePrice: 1.1020, volatility: 0.0032, drift: 0.0001 },
             'GBP_USD': { basePrice: 1.2655, volatility: 0.0032, drift: 0.0002 },
             
-            // Cryptocurrencies - оптимизированная волатильность для красивого отображения
+            // Cryptocurrencies - увеличенная волатильность для более динамичного отображения
             'BTC': { basePrice: 68500, volatility: 0.0065, drift: 0.0002 },
-            'BTC_OTC': { basePrice: 68750, volatility: 0.0038, drift: 0.0002 },
-            'BTC_ETF_OTC': { basePrice: 68600, volatility: 0.0037, drift: 0.0001 },
-            'ETH_OTC': { basePrice: 3450, volatility: 0.0036, drift: 0.0003 },
-            'BNB_OTC': { basePrice: 585, volatility: 0.0038, drift: -0.0001 },
-            'SOL_OTC': { basePrice: 168, volatility: 0.0037, drift: 0.0002 },
-            'ADA_OTC': { basePrice: 0.58, volatility: 0.0035, drift: -0.0001 },
-            'DOGE_OTC': { basePrice: 0.14, volatility: 0.0036, drift: 0.0003 },
-            'DOT_OTC': { basePrice: 7.2, volatility: 0.0033, drift: 0.0002 },
-            'MATIC_OTC': { basePrice: 0.78, volatility: 0.0036, drift: -0.0002 },
-            'LTC_OTC': { basePrice: 85, volatility: 0.0034, drift: 0.0003 },
-            'LINK_OTC': { basePrice: 15.8, volatility: 0.0035, drift: 0.0001 },
-            'AVAX_OTC': { basePrice: 38.5, volatility: 0.0037, drift: -0.0002 },
-            'TRX_OTC': { basePrice: 0.168, volatility: 0.0033, drift: 0.0002 },
-            'TON_OTC': { basePrice: 5.6, volatility: 0.0036, drift: 0.0003 },
+            'BTC_OTC': { basePrice: 68750, volatility: 0.0055, drift: 0.0002 },
+            'BTC_ETF_OTC': { basePrice: 68600, volatility: 0.0052, drift: 0.0001 },
+            'ETH_OTC': { basePrice: 3450, volatility: 0.0058, drift: 0.0003 },
+            'BNB_OTC': { basePrice: 585, volatility: 0.0056, drift: -0.0001 },
+            'SOL_OTC': { basePrice: 168, volatility: 0.0062, drift: 0.0002 },
+            'ADA_OTC': { basePrice: 0.58, volatility: 0.0060, drift: -0.0001 },
+            'DOGE_OTC': { basePrice: 0.14, volatility: 0.0064, drift: 0.0003 },
+            'DOT_OTC': { basePrice: 7.2, volatility: 0.0059, drift: 0.0002 },
+            'MATIC_OTC': { basePrice: 0.78, volatility: 0.0061, drift: -0.0002 },
+            'LTC_OTC': { basePrice: 85, volatility: 0.0057, drift: 0.0003 },
+            'LINK_OTC': { basePrice: 15.8, volatility: 0.0058, drift: 0.0001 },
+            'AVAX_OTC': { basePrice: 38.5, volatility: 0.0063, drift: -0.0002 },
+            'TRX_OTC': { basePrice: 0.168, volatility: 0.0056, drift: 0.0002 },
+            'TON_OTC': { basePrice: 5.6, volatility: 0.0060, drift: 0.0003 },
             
             // Commodities - оптимизированная волатильность для естественного вида
             'GOLD_OTC': { basePrice: 2650, volatility: 0.0038, drift: 0.0001 },

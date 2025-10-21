@@ -82,6 +82,7 @@ class ChartManager {
             wickUpColor: '#26d07c',
             wickDownColor: '#ff4757',
             // Настройки для корректного отображения при любом масштабе
+            // Будут обновлены динамически при загрузке данных
             priceFormat: {
                 type: 'price',
                 precision: 4,
@@ -109,9 +110,18 @@ class ChartManager {
             // Это исправляет проблему с отображением на конце графика
             if (this.chart && this.candleSeries) {
                 try {
-                    const priceScale = this.chart.priceScale('right');
-                    // Trigger autoscale recalculation
-                    priceScale.applyOptions({ autoScale: true });
+                    // Получаем видимые данные для правильного масштабирования
+                    const timeScale = this.chart.timeScale();
+                    const logicalRange = timeScale.getVisibleLogicalRange();
+                    
+                    if (logicalRange) {
+                        // Принудительно обновляем масштаб
+                        this.chart.applyOptions({
+                            rightPriceScale: {
+                                autoScale: true,
+                            }
+                        });
+                    }
                 } catch (e) {
                     // Игнорируем ошибки если график еще не готов
                 }
@@ -120,6 +130,22 @@ class ChartManager {
 
         this.isInitialized = true;
         console.log('Chart initialized');
+    }
+
+    // Определение точности цены на основе диапазона цен
+    determinePricePrecision(data) {
+        if (!data || data.length === 0) return { precision: 4, minMove: 0.0001 };
+        
+        // Находим среднюю цену
+        const avgPrice = data.reduce((sum, candle) => sum + candle.close, 0) / data.length;
+        
+        if (avgPrice >= 1000) return { precision: 2, minMove: 0.01 };      // Например BTC: 68750.23
+        if (avgPrice >= 100) return { precision: 3, minMove: 0.001 };      // Например ETH: 3450.123
+        if (avgPrice >= 10) return { precision: 4, minMove: 0.0001 };      // Например USD/MXN: 18.9167
+        if (avgPrice >= 1) return { precision: 4, minMove: 0.0001 };       // Например EUR/USD: 1.0850
+        if (avgPrice >= 0.1) return { precision: 5, minMove: 0.00001 };    // Например DOGE: 0.14523
+        if (avgPrice >= 0.01) return { precision: 6, minMove: 0.000001 };  // Например маленькие пары
+        return { precision: 8, minMove: 0.00000001 };                       // Для очень маленьких цен
     }
 
     // Загрузка исторических данных
@@ -142,6 +168,18 @@ class ChartManager {
                 return;
             }
 
+            // Определяем оптимальную точность для этого актива
+            const priceFormat = this.determinePricePrecision(data);
+            
+            // Обновляем формат цены для серии свечей
+            this.candleSeries.applyOptions({
+                priceFormat: {
+                    type: 'price',
+                    precision: priceFormat.precision,
+                    minMove: priceFormat.minMove,
+                }
+            });
+
             // Устанавливаем данные свечей
             this.candleSeries.setData(data);
             
@@ -153,10 +191,21 @@ class ChartManager {
             // Автоматически подгоняем видимый диапазон
             this.chart.timeScale().fitContent();
             
+            // Принудительно обновляем масштаб цен
+            setTimeout(() => {
+                if (this.chart) {
+                    this.chart.applyOptions({
+                        rightPriceScale: {
+                            autoScale: true,
+                        }
+                    });
+                }
+            }, 100);
+            
             // Запускаем анимацию последней свечи
             this.startCandleAnimation();
 
-            console.log(`Loaded ${data.length} candles for ${symbol}`);
+            console.log(`Loaded ${data.length} candles for ${symbol} with precision ${priceFormat.precision}`);
         } catch (error) {
             console.error('Error loading historical data:', error);
         }
@@ -199,6 +248,13 @@ class ChartManager {
                                 if (this.chart) {
                                     // Прокручиваем к самой правой позиции
                                     this.chart.timeScale().scrollToPosition(0, false);
+                                    
+                                    // Принудительно обновляем масштаб цен
+                                    this.chart.applyOptions({
+                                        rightPriceScale: {
+                                            autoScale: true,
+                                        }
+                                    });
                                 }
                             }, 50);
                         }
@@ -239,7 +295,16 @@ class ChartManager {
         // Обновляем текущую цену в интерфейсе
         const priceEl = document.getElementById('current-price');
         if (priceEl) {
-            priceEl.textContent = candle.close.toFixed(4);
+            // Определяем точность отображения
+            let precision = 4;
+            if (candle.close >= 1000) precision = 2;
+            else if (candle.close >= 100) precision = 3;
+            else if (candle.close >= 0.1) precision = 4;
+            else if (candle.close >= 0.01) precision = 5;
+            else if (candle.close >= 0.001) precision = 6;
+            else precision = 8;
+            
+            priceEl.textContent = candle.close.toFixed(precision);
             
             // Добавляем анимацию изменения цены
             priceEl.classList.remove('price-up', 'price-down');
@@ -254,6 +319,17 @@ class ChartManager {
             
             priceEl.dataset.prevPrice = candle.close;
         }
+    }
+
+    // Определить волатильность для анимации на основе цены
+    getAnimationVolatility(price) {
+        // Для больших цен используем меньшую относительную волатильность
+        if (price >= 10000) return 0.0004;  // BTC и др.
+        if (price >= 1000) return 0.0005;   // ETH и др.
+        if (price >= 100) return 0.0006;
+        if (price >= 10) return 0.0007;
+        if (price >= 1) return 0.0008;
+        return 0.0010;  // Для маленьких цен
     }
 
     // Анимация последней свечи (каждые 0.3 секунды)
@@ -274,12 +350,21 @@ class ChartManager {
             
             // Генерируем небольшое случайное изменение цены с повышенной детализацией
             // Используем разную волатильность для разных активов
-            const baseVolatility = 0.0003;
+            const baseVolatility = this.getAnimationVolatility(animatedCandle.close);
             const priceChange = (Math.random() - 0.5) * 2 * baseVolatility;
             const newClose = animatedCandle.close * (1 + priceChange);
             
-            // Обновляем close с большей точностью (избегаем ступенчатости)
-            animatedCandle.close = parseFloat(newClose.toFixed(4));
+            // Определяем точность на основе цены
+            let precision = 4;
+            if (animatedCandle.close >= 1000) precision = 2;
+            else if (animatedCandle.close >= 100) precision = 3;
+            else if (animatedCandle.close >= 0.1) precision = 4;
+            else if (animatedCandle.close >= 0.01) precision = 5;
+            else if (animatedCandle.close >= 0.001) precision = 6;
+            else precision = 8;
+            
+            // Обновляем close с правильной точностью (избегаем ступенчатости)
+            animatedCandle.close = parseFloat(newClose.toFixed(precision));
             
             // Обновляем high и low если нужно, но с ограничением размера теней
             if (animatedCandle.close > animatedCandle.high) {
