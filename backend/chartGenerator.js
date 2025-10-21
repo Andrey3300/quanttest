@@ -116,10 +116,23 @@ class ChartGenerator {
         // Новая свеча ВСЕГДА начинается с цены закрытия предыдущей свечи
         const openPrice = this.currentPrice;
         
+        // Вычисляем timestamp в секундах (для lightweight-charts)
+        let timestamp = Math.floor(now / 1000);
+        
+        // ВАЖНО: Проверяем что новая свеча не старше последней
+        if (this.candles.length > 0) {
+            const lastCandle = this.candles[this.candles.length - 1];
+            if (timestamp <= lastCandle.time) {
+                // Если время такое же или меньше, добавляем 1 секунду для избежания конфликта
+                timestamp = lastCandle.time + 1;
+                console.warn(`Adjusted new candle timestamp to avoid conflict: ${timestamp}`);
+            }
+        }
+        
         // Создаем начальную свечу где open = high = low = close
         // Это гарантирует правильное отображение и continuity между свечами
         const candle = {
-            time: Math.floor(now / 1000),
+            time: timestamp,
             open: parseFloat(openPrice.toFixed(precision)),
             high: parseFloat(openPrice.toFixed(precision)),
             low: parseFloat(openPrice.toFixed(precision)),
@@ -148,6 +161,12 @@ class ChartGenerator {
             targetHigh: candle.high,
             targetLow: candle.low
         };
+        
+        // Финальная валидация перед возвратом
+        if (typeof candle.time !== 'number' || isNaN(candle.time)) {
+            console.error('Invalid new candle time:', candle);
+            candle.time = Math.floor(Date.now() / 1000);
+        }
         
         return candle;
     }
@@ -232,7 +251,8 @@ class ChartGenerator {
             }
         }
         
-        return {
+        // Создаем объект для возврата с явной проверкой типов
+        const tickCandle = {
             time: this.currentCandleState.time,
             open: this.currentCandleState.open,
             high: this.currentCandleState.high,
@@ -240,6 +260,26 @@ class ChartGenerator {
             close: this.currentCandleState.close,
             volume: this.currentCandleState.volume
         };
+        
+        // Валидация: все значения должны быть числами
+        if (typeof tickCandle.time !== 'number' || isNaN(tickCandle.time) ||
+            typeof tickCandle.open !== 'number' || isNaN(tickCandle.open) ||
+            typeof tickCandle.high !== 'number' || isNaN(tickCandle.high) ||
+            typeof tickCandle.low !== 'number' || isNaN(tickCandle.low) ||
+            typeof tickCandle.close !== 'number' || isNaN(tickCandle.close)) {
+            console.error('Invalid tick candle data:', tickCandle);
+            // Возвращаем безопасную копию без NaN
+            return {
+                time: this.currentCandleState.time || Math.floor(Date.now() / 1000),
+                open: this.currentCandleState.open || this.basePrice,
+                high: this.currentCandleState.high || this.basePrice,
+                low: this.currentCandleState.low || this.basePrice,
+                close: this.currentCandleState.close || this.basePrice,
+                volume: this.currentCandleState.volume || 1000
+            };
+        }
+        
+        return tickCandle;
     }
 
     // Получение исторических данных

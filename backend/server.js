@@ -345,12 +345,26 @@ wss.on('connection', (ws, req) => {
   });
 });
 
+// Флаг для блокировки тиков во время создания новой свечи
+let isCreatingNewCandle = false;
+
 // Плавные обновления текущей свечи (тики) каждые 150ms
 setInterval(() => {
+  // Не отправляем тики, если создается новая свеча
+  if (isCreatingNewCandle) {
+    return;
+  }
+  
   subscriptions.forEach((clients, symbol) => {
     if (clients.size > 0) {
       const generator = getGenerator(symbol);
       const updatedCandle = generator.generateCandleTick();
+      
+      // Дополнительная проверка: убедимся что время - это число
+      if (typeof updatedCandle.time !== 'number' || isNaN(updatedCandle.time)) {
+        console.error('Invalid tick time format:', updatedCandle.time);
+        return;
+      }
       
       const message = JSON.stringify({
         type: 'tick',
@@ -370,10 +384,19 @@ setInterval(() => {
 
 // Создание новой свечи каждые 5 секунд
 setInterval(() => {
+  // Блокируем отправку тиков
+  isCreatingNewCandle = true;
+  
   subscriptions.forEach((clients, symbol) => {
     if (clients.size > 0) {
       const generator = getGenerator(symbol);
       const newCandle = generator.generateNextCandle();
+      
+      // Проверка: убедимся что время - это число
+      if (typeof newCandle.time !== 'number' || isNaN(newCandle.time)) {
+        console.error('Invalid new candle time format:', newCandle.time);
+        return;
+      }
       
       const message = JSON.stringify({
         type: 'newCandle',
@@ -387,8 +410,15 @@ setInterval(() => {
           client.send(message);
         }
       });
+      
+      console.log(`New candle created for ${symbol} at time ${newCandle.time}`);
     }
   });
+  
+  // Разблокируем отправку тиков через 200ms, чтобы дать время фронтенду обработать новую свечу
+  setTimeout(() => {
+    isCreatingNewCandle = false;
+  }, 200);
 }, 5000); // каждые 5 секунд фиксируем свечу и создаем новую
 
 server.listen(PORT, () => {
