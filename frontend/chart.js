@@ -11,9 +11,20 @@ class ChartManager {
         this.isInitialized = false;
         this.isUserInteracting = false; // флаг взаимодействия пользователя
         this.lastUpdateTime = 0; // время последнего обновления
-        this.updateThrottle = 50; // минимальный интервал между обновлениями (ms)
+        this.updateThrottle = 150; // минимальный интервал между обновлениями (ms) - увеличено в 3 раза
         this.lastCandle = null; // последняя свеча для отслеживания
         this.candleCount = 0; // количество свечей для корректного расчета индексов
+        
+        // РЕШЕНИЕ #6: Debounce для скролла
+        this.scrollDebounceTimer = null;
+        this.pendingScrollRange = null;
+        
+        // РЕШЕНИЕ #1: Контроль autoScale
+        this.isAdjustingScale = false;
+        
+        // Защита от схлопывания
+        this.MIN_VISIBLE_BARS = 10; // минимальная ширина видимого диапазона
+        this.isRestoringRange = false; // флаг восстановления диапазона
     }
 
     // Инициализация графика
@@ -140,6 +151,46 @@ class ChartManager {
             setTimeout(() => {
                 this.isUserInteracting = false;
             }, 200);
+        });
+        
+        // РЕШЕНИЕ #7: Защита от схлопывания графика через мониторинг диапазона
+        this.chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+            if (!range || this.isRestoringRange || !this.isInitialized) return;
+            
+            // Проверяем на схлопывание
+            const visibleBars = range.to - range.from;
+            const rightOffsetBars = 12;
+            const pureVisibleBars = visibleBars - rightOffsetBars;
+            
+            if (pureVisibleBars < this.MIN_VISIBLE_BARS) {
+                window.errorLogger?.error('range', 'Chart collapse detected! Restoring safe range...', {
+                    currentRange: { from: range.from, to: range.to },
+                    visibleBars: visibleBars,
+                    pureVisibleBars: pureVisibleBars,
+                    minRequired: this.MIN_VISIBLE_BARS
+                });
+                console.error('Chart collapse detected! Range too narrow:', pureVisibleBars, 'bars');
+                
+                // Восстанавливаем безопасный диапазон
+                const safeVisibleBars = 100; // отображаем последние 100 свечей
+                const safeRange = {
+                    from: Math.max(0, this.candleCount - safeVisibleBars),
+                    to: Math.max(safeVisibleBars, this.candleCount - 1 + rightOffsetBars)
+                };
+                
+                window.errorLogger?.info('range', 'Restoring safe range', { safeRange });
+                
+                // Устанавливаем флаг чтобы избежать рекурсии
+                this.isRestoringRange = true;
+                
+                // Применяем с небольшой задержкой
+                setTimeout(() => {
+                    this.chart.timeScale().setVisibleLogicalRange(safeRange);
+                    setTimeout(() => {
+                        this.isRestoringRange = false;
+                    }, 100);
+                }, 0);
+            }
         });
 
         this.isInitialized = true;
@@ -390,75 +441,120 @@ class ChartManager {
             
             // Плавно прокручиваем к последней свече только если пользователь не взаимодействует
             if (!this.isUserInteracting) {
-                try {
-                    const timeScale = this.chart.timeScale();
-                    const currentRange = timeScale.getVisibleLogicalRange();
-                    
-                    if (currentRange) {
-                        const rightOffsetBars = 12; // фиксированный отступ справа из настроек
+                // РЕШЕНИЕ #6: Используем debounce для предотвращения множественных вызовов
+                clearTimeout(this.scrollDebounceTimer);
+                
+                this.scrollDebounceTimer = setTimeout(() => {
+                    try {
+                        const timeScale = this.chart.timeScale();
+                        const currentRange = timeScale.getVisibleLogicalRange();
                         
-                        // Проверяем, находимся ли мы близко к концу графика
-                        // Используем индекс последней свечи ПЕРЕД увеличением счётчика
-                        const previousLastIndex = this.candleCount - 2;
-                        const isNearEnd = currentRange.to >= (previousLastIndex - 5);
-                        
-                        // Логируем текущее состояние ПЕРЕД расчетами
-                        window.errorLogger?.debug('range', 'Before scroll calculation', {
-                            candleCount: this.candleCount,
-                            previousLastIndex: previousLastIndex,
-                            currentRange: { from: currentRange.from, to: currentRange.to },
-                            isNearEnd: isNearEnd,
-                            rightOffsetBars: rightOffsetBars
-                        });
-                        
-                        if (isNearEnd) {
-                            // ИСПРАВЛЕНИЕ 1: НЕ вычитаем rightOffset из ширины!
-                            // Просто берем реальную ширину видимого диапазона
-                            const visibleBarsWidth = currentRange.to - currentRange.from;
+                        if (currentRange) {
+                            const rightOffsetBars = 12; // фиксированный отступ справа из настроек
                             
-                            // ИСПРАВЛЕНИЕ 2: Проверяем что from не будет отрицательным
-                            const newFrom = Math.max(0, this.candleCount - 1 - visibleBarsWidth + rightOffsetBars);
-                            const newTo = this.candleCount - 1 + rightOffsetBars;
+                            // Проверяем, находимся ли мы близко к концу графика
+                            const lastRealCandleIndex = this.candleCount - 1;
+                            const isNearEnd = currentRange.to >= (lastRealCandleIndex - 5);
                             
-                            const newRange = {
-                                from: newFrom,
-                                to: newTo
-                            };
-                            
-                            // Логируем расчеты
-                            window.errorLogger?.debug('range', 'Scroll calculation result', {
-                                visibleBarsWidth: visibleBarsWidth,
-                                calculatedFrom: this.candleCount - 1 - visibleBarsWidth + rightOffsetBars,
-                                newFrom: newFrom,
-                                newTo: newTo,
-                                newRange: newRange
+                            // Логируем текущее состояние ПЕРЕД расчетами
+                            window.errorLogger?.debug('range', 'Before scroll calculation', {
+                                candleCount: this.candleCount,
+                                lastRealCandleIndex: lastRealCandleIndex,
+                                currentRange: { from: currentRange.from, to: currentRange.to },
+                                isNearEnd: isNearEnd,
+                                rightOffsetBars: rightOffsetBars
                             });
                             
-                            // Проверка на разумность значений перед применением
-                            if (newFrom < 0 || newTo < 0 || newFrom >= newTo) {
-                                window.errorLogger?.error('range', 'Invalid range calculated!', {
-                                    newRange: newRange,
-                                    candleCount: this.candleCount,
-                                    currentRange: currentRange
+                            if (isNearEnd) {
+                                // РЕШЕНИЕ #3: ИСПРАВЛЕННЫЙ расчет диапазона
+                                // 1. Вычисляем "чистую" ширину видимых свечей БЕЗ rightOffset
+                                const totalWidth = currentRange.to - currentRange.from;
+                                const pureVisibleBars = Math.max(this.MIN_VISIBLE_BARS, Math.floor(totalWidth - rightOffsetBars));
+                                
+                                // 2. Рассчитываем новый from относительно последней реальной свечи
+                                const newFrom = Math.max(0, lastRealCandleIndex - pureVisibleBars);
+                                const newTo = lastRealCandleIndex + rightOffsetBars;
+                                
+                                // 3. КРИТИЧНО: Проверяем минимальную ширину
+                                const calculatedPureWidth = newTo - newFrom - rightOffsetBars;
+                                
+                                if (calculatedPureWidth < this.MIN_VISIBLE_BARS) {
+                                    window.errorLogger?.error('range', 'Preventing chart collapse - range too narrow!', {
+                                        calculatedPureWidth: calculatedPureWidth,
+                                        minRequired: this.MIN_VISIBLE_BARS,
+                                        newFrom: newFrom,
+                                        newTo: newTo
+                                    });
+                                    console.error('Preventing chart collapse - calculated range too narrow!');
+                                    return;
+                                }
+                                
+                                const newRange = {
+                                    from: newFrom,
+                                    to: newTo
+                                };
+                                
+                                // Логируем расчеты
+                                window.errorLogger?.debug('range', 'Scroll calculation result', {
+                                    totalWidth: totalWidth,
+                                    pureVisibleBars: pureVisibleBars,
+                                    calculatedPureWidth: calculatedPureWidth,
+                                    newFrom: newFrom,
+                                    newTo: newTo,
+                                    newRange: newRange
                                 });
-                                console.error('Invalid range calculated:', newRange);
-                            } else {
-                                // Устанавливаем новый диапазон БЕЗ анимации для плавного обновления
+                                
+                                // Финальная проверка на разумность значений
+                                if (newFrom < 0 || newTo < 0 || newFrom >= newTo) {
+                                    window.errorLogger?.error('range', 'Invalid range calculated!', {
+                                        newRange: newRange,
+                                        candleCount: this.candleCount,
+                                        currentRange: currentRange
+                                    });
+                                    console.error('Invalid range calculated:', newRange);
+                                    return;
+                                }
+                                
+                                // РЕШЕНИЕ #1: Временно отключаем autoScale перед установкой диапазона
+                                this.isAdjustingScale = true;
+                                
+                                // Сохраняем текущие настройки
+                                const currentAutoScale = true; // из настроек
+                                
+                                // Отключаем autoScale
+                                this.chart.applyOptions({
+                                    rightPriceScale: {
+                                        autoScale: false
+                                    }
+                                });
+                                
+                                // Устанавливаем новый диапазон
                                 timeScale.setVisibleLogicalRange(newRange);
                                 
                                 window.errorLogger?.debug('range', 'Range applied successfully', { newRange });
+                                
+                                // Через небольшую задержку возвращаем autoScale
+                                setTimeout(() => {
+                                    this.chart.applyOptions({
+                                        rightPriceScale: {
+                                            autoScale: currentAutoScale
+                                        }
+                                    });
+                                    this.isAdjustingScale = false;
+                                }, 150);
                             }
+                        } else {
+                            window.errorLogger?.warn('range', 'No current range available');
                         }
-                    } else {
-                        window.errorLogger?.warn('range', 'No current range available');
+                    } catch (error) {
+                        window.errorLogger?.error('range', 'Error scrolling chart', { 
+                            error: error.message, 
+                            stack: error.stack 
+                        });
+                        console.error('Error scrolling chart:', error);
+                        this.isAdjustingScale = false;
                     }
-                } catch (error) {
-                    window.errorLogger?.error('range', 'Error scrolling chart', { 
-                        error: error.message, 
-                        stack: error.stack 
-                    });
-                    console.error('Error scrolling chart:', error);
-                }
+                }, 50); // 50ms debounce
             } else {
                 window.errorLogger?.debug('range', 'Skipping scroll - user is interacting');
             }
