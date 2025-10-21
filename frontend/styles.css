@@ -189,14 +189,15 @@ body {
 }
 
 .sidebar .logo {
-    font-size: 20px;
+    font-size: 12px;
     font-weight: bold;
     background: linear-gradient(135deg, var(--accent-green) 0%, var(--accent-blue) 100%);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     margin-bottom: 40px;
-    writing-mode: vertical-lr;
-    transform: rotate(180deg);
+    writing-mode: horizontal-tb;
+    transform: rotate(-90deg);
+    white-space: nowrap;
 }
 
 .nav-menu {
@@ -277,7 +278,7 @@ body {
 .asset-selector {
     display: flex;
     align-items: center;
-    gap: 16px;
+    gap: 12px;
 }
 
 .asset-name {
@@ -314,6 +315,7 @@ body {
     display: flex;
     align-items: center;
     gap: 16px;
+    position: relative;
 }
 
 .balance-display {
@@ -323,6 +325,13 @@ body {
     padding: 8px 16px;
     background: var(--bg-tertiary);
     border-radius: 8px;
+    cursor: pointer;
+    position: relative;
+    transition: all 0.3s;
+}
+
+.balance-display:hover {
+    background: var(--border-color);
 }
 
 .balance-label {
@@ -373,6 +382,114 @@ body {
     background: var(--border-color);
 }
 
+/* Candle Settings Button */
+.candle-settings-btn {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 8px;
+    cursor: pointer;
+    color: var(--text-secondary);
+    transition: all 0.3s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.candle-settings-btn:hover {
+    background: var(--border-color);
+    color: var(--accent-blue);
+}
+
+/* Account Menu */
+.account-menu {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 8px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 16px;
+    min-width: 350px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    z-index: 1000;
+}
+
+.account-option {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px;
+    border-radius: 8px;
+    margin-bottom: 8px;
+    background: var(--bg-tertiary);
+    cursor: pointer;
+    transition: all 0.3s;
+    border: 2px solid transparent;
+}
+
+.account-option:last-child {
+    margin-bottom: 0;
+}
+
+.account-option:hover {
+    background: var(--border-color);
+    border-color: var(--accent-blue);
+}
+
+.account-option[data-active="true"] {
+    border-color: var(--accent-green);
+    background: rgba(38, 208, 124, 0.1);
+}
+
+.account-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.account-info svg {
+    color: var(--accent-blue);
+}
+
+.account-option[data-account="real"] .account-info svg {
+    color: var(--accent-gold);
+}
+
+.account-name {
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+}
+
+.account-balance {
+    font-size: 14px;
+    color: var(--text-secondary);
+}
+
+.currency-badge {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.top-up-mini-btn {
+    background: var(--accent-green);
+    border: none;
+    padding: 8px 16px;
+    border-radius: 6px;
+    color: white;
+    font-weight: 600;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+
+.top-up-mini-btn:hover {
+    background: #20b368;
+    transform: translateY(-2px);
+}
+
 /* График */
 .chart-container {
     flex: 1;
@@ -401,21 +518,6 @@ body {
     overflow-y: auto;
 }
 
-.panel-header {
-    padding: 16px;
-    border-bottom: 1px solid var(--border-color);
-}
-
-.tab-btn {
-    background: var(--accent-blue);
-    border: none;
-    padding: 10px 24px;
-    border-radius: 8px;
-    color: white;
-    font-weight: 600;
-    cursor: pointer;
-    width: 100%;
-}
 
 .trade-settings {
     padding: 24px;

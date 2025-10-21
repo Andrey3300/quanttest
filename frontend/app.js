@@ -6,6 +6,7 @@ const API_URL = window.location.origin.includes('localhost')
 // Хранение токена и данных пользователя
 let authToken = localStorage.getItem('authToken');
 let currentUser = null;
+let currentAccountType = localStorage.getItem('accountType') || 'demo';
 
 // Проверка авторизации при загрузке
 document.addEventListener('DOMContentLoaded', () => {
@@ -27,8 +28,10 @@ async function verifyToken() {
 
         if (response.ok) {
             currentUser = await response.json();
+            currentAccountType = currentUser.activeAccount || 'demo';
+            localStorage.setItem('accountType', currentAccountType);
             showTradingPage();
-            updateUserBalance(currentUser.balance);
+            updateUserDisplay();
         } else {
             localStorage.removeItem('authToken');
             authToken = null;
@@ -107,11 +110,13 @@ async function handleLogin(event) {
         if (response.ok) {
             authToken = data.token;
             currentUser = data.user;
+            currentAccountType = data.user.activeAccount || 'demo';
             localStorage.setItem('authToken', authToken);
+            localStorage.setItem('accountType', currentAccountType);
             showSuccess('Вход выполнен успешно!');
             setTimeout(() => {
                 showTradingPage();
-                updateUserBalance(currentUser.balance);
+                updateUserDisplay();
             }, 1000);
         } else {
             showError(data.error || 'Ошибка входа');
@@ -149,11 +154,13 @@ async function handleRegister(event) {
         if (response.ok) {
             authToken = data.token;
             currentUser = data.user;
+            currentAccountType = data.user.activeAccount || 'demo';
             localStorage.setItem('authToken', authToken);
+            localStorage.setItem('accountType', currentAccountType);
             showSuccess('Регистрация успешна!');
             setTimeout(() => {
                 showTradingPage();
-                updateUserBalance(currentUser.balance);
+                updateUserDisplay();
             }, 1000);
         } else {
             showError(data.error || 'Ошибка регистрации');
@@ -196,8 +203,10 @@ async function handleForgotPassword(event) {
 // Выход
 function handleLogout() {
     localStorage.removeItem('authToken');
+    localStorage.removeItem('accountType');
     authToken = null;
     currentUser = null;
+    currentAccountType = 'demo';
     showAuthPage();
     showLogin();
 }
@@ -233,6 +242,112 @@ function updateUserBalance(balance) {
             maximumFractionDigits: 2
         });
     }
+}
+
+// Обновить отображение пользователя
+function updateUserDisplay() {
+    if (!currentUser) return;
+    
+    const accountLabelEl = document.getElementById('account-label');
+    const userBalanceEl = document.getElementById('user-balance');
+    const demoBalanceEl = document.getElementById('demo-balance');
+    const realBalanceEl = document.getElementById('real-balance');
+    
+    const isDemo = currentAccountType === 'demo';
+    const balance = isDemo ? (currentUser.demoBalance || 10000) : (currentUser.realBalance || 0);
+    
+    if (accountLabelEl) {
+        accountLabelEl.textContent = isDemo ? 'Demo account' : 'Real account';
+    }
+    
+    if (userBalanceEl) {
+        userBalanceEl.textContent = balance.toLocaleString('en-US', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
+    }
+    
+    if (demoBalanceEl) {
+        demoBalanceEl.textContent = (currentUser.demoBalance || 10000).toLocaleString('en-US', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
+    }
+    
+    if (realBalanceEl) {
+        realBalanceEl.textContent = (currentUser.realBalance || 0).toLocaleString('en-US', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
+    }
+    
+    // Обновить активный статус в меню
+    document.querySelectorAll('.account-option').forEach(option => {
+        const accountType = option.getAttribute('data-account');
+        option.setAttribute('data-active', accountType === currentAccountType ? 'true' : 'false');
+    });
+}
+
+// Переключение меню аккаунтов
+function toggleAccountMenu() {
+    const menu = document.getElementById('account-menu');
+    if (menu) {
+        menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+    }
+}
+
+// Закрыть меню при клике вне его
+document.addEventListener('click', (event) => {
+    const menu = document.getElementById('account-menu');
+    const balanceDisplay = document.querySelector('.balance-display');
+    
+    if (menu && balanceDisplay && 
+        !menu.contains(event.target) && 
+        !balanceDisplay.contains(event.target)) {
+        menu.style.display = 'none';
+    }
+});
+
+// Выбрать аккаунт
+async function selectAccount(accountType) {
+    if (accountType === currentAccountType) {
+        toggleAccountMenu();
+        return;
+    }
+    
+    try {
+        const response = await fetch(`${API_URL}/api/switch-account`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${authToken}`
+            },
+            body: JSON.stringify({ accountType })
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            currentUser = data;
+            currentAccountType = accountType;
+            localStorage.setItem('accountType', accountType);
+            updateUserDisplay();
+            toggleAccountMenu();
+        } else {
+            console.error('Failed to switch account');
+        }
+    } catch (error) {
+        console.error('Account switch error:', error);
+    }
+}
+
+// Настройки свечей
+function toggleCandleSettings() {
+    alert('Настройки свечей будут добавлены позже');
+}
+
+// Пополнение счета
+function handleTopUp() {
+    alert('Функция пополнения счета будет добавлена позже');
 }
 
 // Навигация
