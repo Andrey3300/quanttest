@@ -101,7 +101,9 @@ app.post('/api/register', async (req, res) => {
         user: {
           id: existingUser.id,
           email: existingUser.email,
-          balance: existingUser.balance
+          demoBalance: existingUser.demoBalance || 10000,
+          realBalance: existingUser.realBalance || 0,
+          activeAccount: existingUser.activeAccount || 'demo'
         }
       });
     }
@@ -114,7 +116,9 @@ app.post('/api/register', async (req, res) => {
       id: users.length > 0 ? Math.max(...users.map(u => u.id)) + 1 : 1,
       email,
       password: hashedPassword,
-      balance: 21455.50, // Начальный баланс
+      demoBalance: 10000, // Демо баланс
+      realBalance: 0, // Реальный баланс
+      activeAccount: 'demo', // Активный аккаунт по умолчанию
       createdAt: new Date().toISOString()
     };
 
@@ -129,7 +133,9 @@ app.post('/api/register', async (req, res) => {
       user: {
         id: user.id,
         email: user.email,
-        balance: user.balance
+        demoBalance: user.demoBalance,
+        realBalance: user.realBalance,
+        activeAccount: user.activeAccount
       }
     });
   } catch (error) {
@@ -167,7 +173,9 @@ app.post('/api/login', async (req, res) => {
       user: {
         id: user.id,
         email: user.email,
-        balance: user.balance
+        demoBalance: user.demoBalance || 10000,
+        realBalance: user.realBalance || 0,
+        activeAccount: user.activeAccount || 'demo'
       }
     });
   } catch (error) {
@@ -225,7 +233,34 @@ app.get('/api/user', authenticateToken, (req, res) => {
   res.json({
     id: user.id,
     email: user.email,
-    balance: user.balance
+    demoBalance: user.demoBalance || 10000,
+    realBalance: user.realBalance || 0,
+    activeAccount: user.activeAccount || 'demo'
+  });
+});
+
+// Переключение аккаунта
+app.post('/api/switch-account', authenticateToken, (req, res) => {
+  const { accountType } = req.body;
+  
+  if (accountType !== 'demo' && accountType !== 'real') {
+    return res.status(400).json({ error: 'Invalid account type' });
+  }
+  
+  const user = users.find(u => u.id === req.user.id);
+  if (!user) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+  
+  user.activeAccount = accountType;
+  saveUsers(users);
+  
+  res.json({
+    id: user.id,
+    email: user.email,
+    demoBalance: user.demoBalance || 10000,
+    realBalance: user.realBalance || 0,
+    activeAccount: user.activeAccount
   });
 });
 
