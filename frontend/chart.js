@@ -109,27 +109,40 @@ class ChartManager {
         });
 
         // Подписываемся на изменения видимого диапазона для корректного масштабирования
+        let scaleUpdateTimeout = null;
         this.chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
-            // Принудительно пересчитываем масштаб цены при изменении видимого диапазона
-            // Это исправляет проблему с отображением на конце графика
-            if (this.chart && this.candleSeries) {
-                try {
-                    // Получаем видимые данные для правильного масштабирования
-                    const timeScale = this.chart.timeScale();
-                    const logicalRange = timeScale.getVisibleLogicalRange();
-                    
-                    if (logicalRange) {
-                        // Принудительно обновляем масштаб
-                        this.chart.applyOptions({
-                            rightPriceScale: {
-                                autoScale: true,
-                            }
-                        });
-                    }
-                } catch (e) {
-                    // Игнорируем ошибки если график еще не готов
-                }
+            // Используем debounce чтобы не перегружать график частыми обновлениями
+            if (scaleUpdateTimeout) {
+                clearTimeout(scaleUpdateTimeout);
             }
+            
+            scaleUpdateTimeout = setTimeout(() => {
+                // Принудительно пересчитываем масштаб цены при изменении видимого диапазона
+                // Это исправляет проблему с отображением на конце графика
+                if (this.chart && this.candleSeries) {
+                    try {
+                        // Получаем видимые данные для правильного масштабирования
+                        const timeScale = this.chart.timeScale();
+                        const logicalRange = timeScale.getVisibleLogicalRange();
+                        
+                        if (logicalRange && logicalRange.from !== null && logicalRange.to !== null) {
+                            // Принудительно обновляем масштаб только если диапазон валидный
+                            this.chart.applyOptions({
+                                rightPriceScale: {
+                                    autoScale: true,
+                                    scaleMargins: {
+                                        top: 0.1,
+                                        bottom: 0.1,
+                                    },
+                                }
+                            });
+                        }
+                    } catch (e) {
+                        // Игнорируем ошибки если график еще не готов
+                        console.debug('Scale update error (safe to ignore):', e.message);
+                    }
+                }
+            }, 50); // Ждем 50мс перед обновлением
         });
 
         this.isInitialized = true;
@@ -216,14 +229,29 @@ class ChartManager {
             // Автоматически подгоняем видимый диапазон
             this.chart.timeScale().fitContent();
             
-            // Принудительно обновляем масштаб цен
+            // Принудительно обновляем масштаб цен с правильными настройками
             setTimeout(() => {
                 if (this.chart) {
+                    // Сначала подгоняем содержимое
+                    this.chart.timeScale().fitContent();
+                    
+                    // Затем обновляем масштаб цен
                     this.chart.applyOptions({
                         rightPriceScale: {
                             autoScale: true,
+                            scaleMargins: {
+                                top: 0.1,
+                                bottom: 0.1,
+                            },
                         }
                     });
+                    
+                    // Дополнительная проверка через небольшую задержку
+                    setTimeout(() => {
+                        if (this.chart) {
+                            this.chart.timeScale().scrollToRealTime();
+                        }
+                    }, 50);
                 }
             }, 100);
             
@@ -288,19 +316,36 @@ class ChartManager {
                                 close: message.data.close
                             };
                             this.updateCandleImmediate(message.data);
+                            
+                            // КРИТИЧНО: После фиксации свечи принудительно обновляем масштаб графика
+                            // Это исправляет проблему с отображением, когда новые свечи появляются "в воздухе"
+                            setTimeout(() => {
+                                if (this.chart && this.candleSeries) {
+                                    // Получаем все данные серии для правильного расчета масштаба
+                                    const timeScale = this.chart.timeScale();
+                                    const visibleRange = timeScale.getVisibleLogicalRange();
+                                    
+                                    // Принудительно пересчитываем масштаб цен
+                                    this.chart.applyOptions({
+                                        rightPriceScale: {
+                                            autoScale: true,
+                                            scaleMargins: {
+                                                top: 0.1,
+                                                bottom: 0.1,
+                                            },
+                                        }
+                                    });
+                                    
+                                    // Если пользователь смотрит на правый край графика, подстраиваем видимый диапазон
+                                    if (visibleRange && visibleRange.to !== null && visibleRange.to !== undefined) {
+                                        const barsCount = Math.floor(visibleRange.to - visibleRange.from);
+                                        timeScale.scrollToPosition(3, false); // Небольшой отступ справа
+                                    }
+                                }
+                            }, 50);
                         } else {
                             // Устанавливаем целевую свечу для плавной интерполяции
                             this.setTargetCandle(message.data);
-                        }
-                        
-                        // Не прокручиваем автоматически - пользователь сам управляет позицией графика
-                        // Только обновляем масштаб цен для корректного отображения новых данных
-                        if (isNewCandle && this.chart) {
-                            this.chart.applyOptions({
-                                rightPriceScale: {
-                                    autoScale: true,
-                                }
-                            });
                         }
                     }
                 } catch (error) {
@@ -546,10 +591,15 @@ class ChartManager {
             this.ws.close();
         }
 
-        // Очищаем график
+        // Очищаем график и сбрасываем состояние
         if (this.candleSeries) {
             this.candleSeries.setData([]);
         }
+        
+        // Сбрасываем состояние свечей
+        this.lastCandle = null;
+        this.currentCandle = null;
+        this.targetCandle = null;
 
         // Загружаем новые данные
         await this.loadHistoricalData(newSymbol);
