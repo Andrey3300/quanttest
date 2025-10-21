@@ -52,17 +52,24 @@ class ChartManager {
                 },
                 // Режим масштабирования для лучшей читаемости
                 mode: 0, // Normal price scale mode
+                // Применяем видимый диапазон только к видимым барам
+                entireTextOnly: false,
             },
             timeScale: {
                 borderColor: '#2d3748',
                 timeVisible: true,
                 secondsVisible: true,
                 // Улучшенное управление масштабированием
-                rightOffset: 5,
+                rightOffset: 12,
                 barSpacing: 6,
                 minBarSpacing: 0.5,
                 fixLeftEdge: false,
                 fixRightEdge: false,
+                // Автоматически прокручиваем к новым данным
+                lockVisibleTimeRangeOnResize: true,
+                rightBarStaysOnScroll: true,
+                // Сдвигаем видимый диапазон при появлении новых баров
+                shiftVisibleRangeOnNewBar: true,
             },
         });
 
@@ -93,6 +100,21 @@ class ChartManager {
                     width: width,
                     height: height,
                 });
+            }
+        });
+
+        // Подписываемся на изменения видимого диапазона для корректного масштабирования
+        this.chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+            // Принудительно пересчитываем масштаб цены при изменении видимого диапазона
+            // Это исправляет проблему с отображением на конце графика
+            if (this.chart && this.candleSeries) {
+                try {
+                    const priceScale = this.chart.priceScale('right');
+                    // Trigger autoscale recalculation
+                    priceScale.applyOptions({ autoScale: true });
+                } catch (e) {
+                    // Игнорируем ошибки если график еще не готов
+                }
             }
         });
 
@@ -166,8 +188,20 @@ class ChartManager {
                         console.log(`Subscribed to ${message.symbol}`);
                     } else if (message.type === 'candle') {
                         // Получили новую свечу с сервера (каждые 5 секунд)
+                        const isNewCandle = !this.lastCandle || this.lastCandle.time !== message.data.time;
                         this.lastCandle = { ...message.data };
                         this.updateCandle(message.data);
+                        
+                        // Если это новая свеча (не обновление существующей), прокручиваем к концу
+                        if (isNewCandle) {
+                            // Используем небольшую задержку для корректного отображения
+                            setTimeout(() => {
+                                if (this.chart) {
+                                    // Прокручиваем к самой правой позиции
+                                    this.chart.timeScale().scrollToPosition(0, false);
+                                }
+                            }, 50);
+                        }
                     }
                 } catch (error) {
                     console.error('Error processing WebSocket message:', error);
