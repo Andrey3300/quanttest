@@ -11,7 +11,7 @@ class ChartManager {
         this.isInitialized = false;
         this.isUserInteracting = false; // флаг взаимодействия пользователя
         this.lastUpdateTime = 0; // время последнего обновления
-        this.updateThrottle = 16; // минимальный интервал между обновлениями (ms) - 60 FPS для плавной анимации
+        this.updateThrottle = 150; // минимальный интервал между обновлениями (ms) - увеличено в 3 раза
         this.lastCandle = null; // последняя свеча для отслеживания
         this.candleCount = 0; // количество свечей для корректного расчета индексов
         this.isDestroyed = false; // флаг уничтожения для предотвращения переподключения
@@ -30,17 +30,6 @@ class ChartManager {
         // Защита от схлопывания
         this.MIN_VISIBLE_BARS = 10; // минимальная ширина видимого диапазона
         this.isRestoringRange = false; // флаг восстановления диапазона
-        
-        // Плавная анимация для активной свечи
-        this.animationState = {
-            isAnimating: false,
-            animationFrameId: null,
-            displayed: null, // текущие отображаемые значения {close, high, low}
-            target: null,    // целевые значения {close, high, low}
-            candleData: null // полные данные свечи {time, open, close, high, low, volume}
-        };
-        this.lerpFactor = 0.008; // коэффициент интерполяции для максимально плавной анимации (уменьшен для плавности)
-        this.animationThreshold = 0.000005; // минимальная разница для остановки анимации (очень маленькая для плавности)
     }
 
     // Инициализация графика
@@ -85,9 +74,9 @@ class ChartManager {
                 borderColor: '#2d3748',
                 timeVisible: true,
                 secondsVisible: true,
-                barSpacing: 12, // Увеличено пространство между свечами (с 8 до 12)
-                minBarSpacing: 6, // Увеличена минимальная толщина (с 4 до 6)
-                rightOffset: 45, // Отступ справа для комфортного просмотра последней свечи
+                barSpacing: 8, // Делаем свечи толще
+                minBarSpacing: 4, // Минимальная толщина при максимальном отдалении
+                rightOffset: 12, // Отступ справа для последней свечи
                 lockVisibleTimeRangeOnResize: true,
             },
         });
@@ -190,7 +179,7 @@ class ChartManager {
             
             // Проверяем на схлопывание
             const visibleBars = range.to - range.from;
-            const rightOffsetBars = 45; // синхронизировано с rightOffset в настройках
+            const rightOffsetBars = 12;
             const pureVisibleBars = visibleBars - rightOffsetBars;
             
             if (pureVisibleBars < this.MIN_VISIBLE_BARS) {
@@ -204,7 +193,7 @@ class ChartManager {
                 console.error('Chart collapse detected! Range too narrow:', pureVisibleBars, 'bars');
                 
                 // УЛУЧШЕНИЕ: Используем candleCount для безопасного восстановления
-                const safeVisibleBars = 70; // отображаем последние 70 свечей для большего пространства
+                const safeVisibleBars = 100; // отображаем последние 100 свечей
                 
                 // Проверяем что у нас достаточно свечей
                 if (this.candleCount < safeVisibleBars) {
@@ -309,12 +298,12 @@ class ChartManager {
             });
             this.chart.timeScale().fitContent();
             
-            // Устанавливаем начальный видимый диапазон (последние ~70 свечей для большего пространства)
+            // Устанавливаем начальный видимый диапазон (последние ~100 свечей)
             if (data.length > 0) {
                 // Используем фиксированный отступ справа (rightOffset из настроек)
-                const rightOffsetBars = 45; // синхронизировано с rightOffset в настройках
+                const rightOffsetBars = 12; // соответствует rightOffset в настройках
                 const visibleLogicalRange = {
-                    from: Math.max(0, data.length - 70), // уменьшено с 100 до 70
+                    from: Math.max(0, data.length - 100),
                     to: data.length - 1 + rightOffsetBars
                 };
                 this.chart.timeScale().setVisibleLogicalRange(visibleLogicalRange);
@@ -331,21 +320,20 @@ class ChartManager {
         }
     }
 
-
-    // КРИТИЧЕСКОЕ УЛУЧШЕНИЕ: Подключение к WebSocket с переиспользованием соединения
-
+    // Подключение к WebSocket (переиспользуем соединение)
     connectWebSocket(symbol) {
         const wsUrl = window.location.origin.includes('localhost')
             ? 'ws://localhost:3001/ws/chart'
             : `ws://${window.location.host}/ws/chart`;
 
         try {
-
-            // РЕШЕНИЕ ПРОБЛЕМЫ WebSocket: Переиспользуем одно соединение
+            // ПРОБЛЕМА WebSocket РЕШЕНА: Переиспользуем одно соединение
             // Если соединение уже есть и оно активно, просто меняем подписку
             if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                console.log('Reusing existing WebSocket connection');
-
+                window.errorLogger?.info('websocket', 'Reusing existing connection for symbol change', { 
+                    oldSymbol: this.symbol,
+                    newSymbol: symbol
+                });
                 
                 // Явный unsubscribe от старого символа
                 if (this.symbol && this.symbol !== symbol) {
@@ -365,13 +353,19 @@ class ChartManager {
             }
             
             // Иначе создаем новое соединение
-
-
-            this.ws = new WebSocket(wsUrl);
+            this.closeWebSocket();
+            
+            // Отменяем любые pending переподключения
+            if (this.reconnectTimer) {
+                clearTimeout(this.reconnectTimer);
+                this.reconnectTimer = null;
+            }
             
             // Увеличиваем ID соединения для отслеживания
             this.connectionId++;
             const currentConnectionId = this.connectionId;
+            
+            this.ws = new WebSocket(wsUrl);
             
             window.errorLogger?.info('websocket', 'Creating new WebSocket connection', { 
                 symbol,
@@ -405,42 +399,39 @@ class ChartManager {
 
                     if (message.type === 'subscribed') {
                         console.log(`Subscribed to ${message.symbol}`);
-
+                        window.errorLogger?.info('websocket', 'Subscription confirmed', { 
+                            symbol: message.symbol,
+                            connectionId: currentConnectionId
+                        });
                     } else if (message.type === 'unsubscribed') {
                         console.log(`Unsubscribed from ${message.symbol}`);
-
+                        window.errorLogger?.info('websocket', 'Unsubscription confirmed', { 
+                            symbol: message.symbol
+                        });
                     } else if (message.type === 'tick') {
-                        // Обновление текущей свечи
-                        window.errorLogger?.debug('websocket', 'Received tick', {
-                            candleTime: message.data.time,
-                            open: message.data.open,
-                            close: message.data.close,
-                            lastCandleTime: this.lastCandle?.time,
-                            lastCandleClose: this.lastCandle?.close
-                        });
+                        // Плавное обновление текущей свечи (не проверяем дубликаты для тиков)
                         this.updateCandle(message.data, false);
-                        
                     } else if (message.type === 'newCandle') {
-                        // Новая свеча
-                        window.errorLogger?.info('websocket', '🆕 NEW CANDLE received', {
-                            newCandleTime: message.data.time,
-                            newCandleOpen: message.data.open,
-                            newCandleClose: message.data.close,
-                            previousCandleTime: this.lastCandle?.time,
-                            previousCandleClose: this.lastCandle?.close,
-                            isContinuous: this.lastCandle ? (message.data.open === this.lastCandle.close) : 'N/A'
-                        });
-                        console.log(`🆕 NEW CANDLE: time=${message.data.time}, open=${message.data.open}, close=${message.data.close}`);
-                        if (this.lastCandle) {
-                            console.log(`   Previous candle: time=${this.lastCandle.time}, close=${this.lastCandle.close}`);
-                            if (message.data.open !== this.lastCandle.close) {
-                                console.error(`   ❌ DISCONTINUITY DETECTED: prev.close=${this.lastCandle.close} !== new.open=${message.data.open}`);
-                            } else {
-                                console.log(`   ✅ Continuous: prev.close === new.open`);
-                            }
+                        // Создание новой свечи
+                        // ЗАЩИТА: Проверяем что эту свечу еще не обрабатывали
+                        const candleKey = `${message.data.time}-${message.symbol || this.symbol}`;
+                        if (this.processedCandles.has(candleKey)) {
+                            window.errorLogger?.warn('websocket', 'Duplicate new candle detected - skipping', {
+                                candleKey,
+                                time: message.data.time
+                            });
+                            return;
                         }
-                        this.updateCandle(message.data, true);
+                        this.processedCandles.add(candleKey);
                         
+                        // Ограничиваем размер Set для предотвращения утечки памяти
+                        if (this.processedCandles.size > 10000) {
+                            // Очищаем старые записи
+                            const entries = Array.from(this.processedCandles);
+                            this.processedCandles = new Set(entries.slice(-5000));
+                        }
+                        
+                        this.updateCandle(message.data, true);
                     } else if (message.type === 'candle') {
                         // Обратная совместимость
                         this.updateCandle(message.data, false);
@@ -578,98 +569,81 @@ class ChartManager {
             return;
         }
         
+        // Троттлинг обновлений - не чаще чем каждые 50ms (только для тиков)
+        const now = Date.now();
+        if (!isNewCandle && (now - this.lastUpdateTime) < this.updateThrottle) {
+            return;
+        }
+        this.lastUpdateTime = now;
+
         // РЕШЕНИЕ #3: Отслеживаем успешность добавления свечи
         let actuallyAddedNewCandle = false;
         
-        // НОВАЯ ЛОГИКА: Плавная анимация для тиков, прямое обновление для новых свечей
+        // Обновляем свечу без перерисовки всего графика
         try {
-            if (isNewCandle) {
-                // Новая свеча - останавливаем анимацию и обновляем сразу
-                this.stopCandleAnimation();
+            this.candleSeries.update(candle);
+            
+            // РЕШЕНИЕ #2 ИСПРАВЛЕНО: Надежный подсчет через инкремент
+            // НЕ используем candleSeries.data().length т.к. он возвращает только буфер!
+            // Проверяем что свеча ДЕЙСТВИТЕЛЬНО добавлена
+            if (isNewCandle && candle.time > beforeUpdateTime) {
+                actuallyAddedNewCandle = true;
                 
-                this.candleSeries.update(candle);
+                // ВАЖНО: Простой инкремент - единственный надежный способ
+                this.candleCount++;
                 
-                // РЕШЕНИЕ #2 ИСПРАВЛЕНО: Надежный подсчет через инкремент
-                // НЕ используем candleSeries.data().length т.к. он возвращает только буфер!
-                // Проверяем что свеча ДЕЙСТВИТЕЛЬНО добавлена
-                if (candle.time > beforeUpdateTime) {
-                    actuallyAddedNewCandle = true;
-                    
-                    // ВАЖНО: Простой инкремент - единственный надежный способ
-                    this.candleCount++;
-                    
-                    window.errorLogger?.debug('chart', 'New candle added - count incremented', {
-                        newCandleCount: this.candleCount,
-                        candleTime: candle.time
+                window.errorLogger?.debug('chart', 'New candle added - count incremented', {
+                    newCandleCount: this.candleCount,
+                    candleTime: candle.time
+                });
+                
+                // КРИТИЧЕСКАЯ ЗАЩИТА: Ограничиваем количество свечей в памяти
+                if (this.candleCount > this.MAX_CANDLES_IN_MEMORY) {
+                    window.errorLogger?.warn('chart', 'Memory limit reached - cleaning old candles', {
+                        currentCount: this.candleCount,
+                        maxAllowed: this.MAX_CANDLES_IN_MEMORY
                     });
                     
-                    // КРИТИЧЕСКАЯ ЗАЩИТА: Ограничиваем количество свечей в памяти
-                    if (this.candleCount > this.MAX_CANDLES_IN_MEMORY) {
-                        window.errorLogger?.warn('chart', 'Memory limit reached - cleaning old candles', {
-                            currentCount: this.candleCount,
-                            maxAllowed: this.MAX_CANDLES_IN_MEMORY
+                    // Получаем все свечи из серии
+                    const allCandles = this.candleSeries.data();
+                    
+                    if (allCandles && allCandles.length > 0) {
+                        // Оставляем только последние MAX_CANDLES_IN_MEMORY свечей
+                        const candlesToKeep = Math.floor(this.MAX_CANDLES_IN_MEMORY * 0.75); // 75% для запаса
+                        const trimmedCandles = allCandles.slice(-candlesToKeep);
+                        
+                        window.errorLogger?.info('chart', 'Trimming candle data', {
+                            before: allCandles.length,
+                            after: trimmedCandles.length,
+                            removed: allCandles.length - trimmedCandles.length
                         });
                         
-                        // Получаем все свечи из серии
-                        const allCandles = this.candleSeries.data();
+                        // Применяем обрезанные данные
+                        this.candleSeries.setData(trimmedCandles);
                         
-                        if (allCandles && allCandles.length > 0) {
-                            // Оставляем только последние MAX_CANDLES_IN_MEMORY свечей
-                            const candlesToKeep = Math.floor(this.MAX_CANDLES_IN_MEMORY * 0.75); // 75% для запаса
-                            const trimmedCandles = allCandles.slice(-candlesToKeep);
-                            
-                            window.errorLogger?.info('chart', 'Trimming candle data', {
-                                before: allCandles.length,
-                                after: trimmedCandles.length,
-                                removed: allCandles.length - trimmedCandles.length
-                            });
-                            
-                            // Применяем обрезанные данные
-                            this.candleSeries.setData(trimmedCandles);
-                            
-                            // Обновляем счетчик
-                            this.candleCount = trimmedCandles.length;
-                            
-                            // Обновляем последнюю свечу
-                            if (trimmedCandles.length > 0) {
-                                this.lastCandle = trimmedCandles[trimmedCandles.length - 1];
-                            }
-                            
-                            // Также обрезаем объемы
-                            const allVolumes = this.volumeSeries.data();
-                            if (allVolumes && allVolumes.length > 0) {
-                                const trimmedVolumes = allVolumes.slice(-candlesToKeep);
-                                this.volumeSeries.setData(trimmedVolumes);
-                            }
+                        // Обновляем счетчик
+                        this.candleCount = trimmedCandles.length;
+                        
+                        // Обновляем последнюю свечу
+                        if (trimmedCandles.length > 0) {
+                            this.lastCandle = trimmedCandles[trimmedCandles.length - 1];
+                        }
+                        
+                        // Также обрезаем объемы
+                        const allVolumes = this.volumeSeries.data();
+                        if (allVolumes && allVolumes.length > 0) {
+                            const trimmedVolumes = allVolumes.slice(-candlesToKeep);
+                            this.volumeSeries.setData(trimmedVolumes);
                         }
                     }
                 }
-                
-                // Обновляем объем для новой свечи
-                this.volumeSeries.update({
-                    time: candle.time,
-                    value: candle.volume,
-                    color: candle.close >= candle.open ? '#26d07c80' : '#ff475780'
-                });
-            } else {
-                // Тик текущей свечи - используем плавную анимацию
-                // Троттлинг для тиков - не обновляем слишком часто
-                const now = Date.now();
-                if ((now - this.lastUpdateTime) < this.updateThrottle) {
-                    return;
-                }
-                this.lastUpdateTime = now;
-                
-                // Запускаем или обновляем анимацию
-                this.updateAnimationTarget(candle);
-                
-                // Объем обновляем без анимации (он накапливается)
-                this.volumeSeries.update({
-                    time: candle.time,
-                    value: candle.volume,
-                    color: candle.close >= candle.open ? '#26d07c80' : '#ff475780'
-                });
             }
+            
+            this.volumeSeries.update({
+                time: candle.time,
+                value: candle.volume,
+                color: candle.close >= candle.open ? '#26d07c80' : '#ff475780'
+            });
         } catch (error) {
             window.errorLogger?.error('chart', 'Error updating chart', {
                 error: error.message,
@@ -704,12 +678,12 @@ class ChartManager {
                 clearTimeout(this.scrollDebounceTimer);
                 
                 this.scrollDebounceTimer = setTimeout(() => {
-                        try {
-                            const timeScale = this.chart.timeScale();
-                            const currentRange = timeScale.getVisibleLogicalRange();
-                            
-                            if (currentRange) {
-                                const rightOffsetBars = 45; // синхронизировано с rightOffset в настройках
+                    try {
+                        const timeScale = this.chart.timeScale();
+                        const currentRange = timeScale.getVisibleLogicalRange();
+                        
+                        if (currentRange) {
+                            const rightOffsetBars = 12; // фиксированный отступ справа из настроек
                             
                             // РЕШЕНИЕ #4: Используем candleCount напрямую, не создаем промежуточных переменных
                             // которые могут внести путаницу
@@ -862,13 +836,14 @@ class ChartManager {
         }
     }
 
-
-    // УЛУЧШЕНИЕ: Смена символа с переиспользованием WebSocket
+    // Смена символа (используем переиспользование соединения)
     async changeSymbol(newSymbol) {
-        console.log(`Changing symbol from ${this.symbol} to ${newSymbol}`);
-        
-        // Очищаем график
+        window.errorLogger?.info('chart', 'Changing symbol', { 
+            from: this.symbol, 
+            to: newSymbol 
+        });
 
+        // Очищаем график и сбрасываем счетчики
         if (this.candleSeries) {
             this.candleSeries.setData([]);
         }
@@ -889,123 +864,36 @@ class ChartManager {
         // Небольшая задержка для гарантии что backend тоже инициализировал генератор
         await new Promise(resolve => setTimeout(resolve, 100));
 
-
-        // Переиспользуем WebSocket соединение (если есть) или создаем новое
+        // Переиспользуем соединение (если есть) или создаем новое
         this.connectWebSocket(newSymbol);
         
-        console.log(`✓ Chart switched to ${newSymbol}`);
-
+        window.errorLogger?.info('chart', 'Chart switched successfully', { 
+            symbol: newSymbol,
+            candleCount: this.candleCount 
+        });
+        console.log(`Chart switched to ${newSymbol} with ${this.candleCount} candles`);
     }
 
-    // Остановка анимации свечей
-    stopCandleAnimation() {
-        if (this.animationState.animationFrameId) {
-            cancelAnimationFrame(this.animationState.animationFrameId);
-            this.animationState.animationFrameId = null;
-        }
-        this.animationState.isAnimating = false;
-        this.animationState.displayed = null;
-        this.animationState.target = null;
-        this.animationState.candleData = null;
-    }
-
-    // Обновление целевых значений анимации
-    updateAnimationTarget(candle) {
-        if (!this.animationState.isAnimating) {
-            // Запускаем новую анимацию
-            this.animationState.isAnimating = true;
-            this.animationState.candleData = candle;
-            this.animationState.displayed = {
-                close: candle.close,
-                high: candle.high,
-                low: candle.low
-            };
-            this.animationState.target = {
-                close: candle.close,
-                high: candle.high,
-                low: candle.low
-            };
-            this.animateCandleUpdate();
-        } else {
-            // Обновляем целевые значения
-            this.animationState.target = {
-                close: candle.close,
-                high: candle.high,
-                low: candle.low
-            };
-            this.animationState.candleData = candle;
-        }
-    }
-
-    // Плавная анимация обновления свечи
-    animateCandleUpdate() {
-        if (!this.animationState.isAnimating || !this.candleSeries) {
-            return;
-        }
-
-        const { displayed, target, candleData } = this.animationState;
-        
-        // Линейная интерполяция
-        displayed.close += (target.close - displayed.close) * this.lerpFactor;
-        displayed.high += (target.high - displayed.high) * this.lerpFactor;
-        displayed.low += (target.low - displayed.low) * this.lerpFactor;
-        
-        // Обновляем свечу с новыми интерполированными значениями
-        const animatedCandle = {
-            time: candleData.time,
-            open: candleData.open,
-            high: displayed.high,
-            low: displayed.low,
-            close: displayed.close,
-            volume: candleData.volume
-        };
-        
-        this.candleSeries.update(animatedCandle);
-        
-        // Проверяем достигли ли целевых значений
-        const closeEnough = Math.abs(target.close - displayed.close) < this.animationThreshold &&
-                           Math.abs(target.high - displayed.high) < this.animationThreshold &&
-                           Math.abs(target.low - displayed.low) < this.animationThreshold;
-        
-        if (!closeEnough) {
-            // Продолжаем анимацию
-            this.animationState.animationFrameId = requestAnimationFrame(() => this.animateCandleUpdate());
-        } else {
-            // Анимация завершена, устанавливаем точные значения
-            displayed.close = target.close;
-            displayed.high = target.high;
-            displayed.low = target.low;
-            
-            const finalCandle = {
-                time: candleData.time,
-                open: candleData.open,
-                high: target.high,
-                low: target.low,
-                close: target.close,
-                volume: candleData.volume
-            };
-            
-            this.candleSeries.update(finalCandle);
-        }
-    }
-
-    // Закрытие WebSocket соединения
+    // Полная очистка WebSocket соединения
     closeWebSocket() {
         if (this.ws) {
-            // Явно отписываемся от текущего символа
-            if (this.symbol) {
-                try {
-                    this.ws.send(JSON.stringify({
-                        type: 'unsubscribe',
-                        symbol: this.symbol
-                    }));
-                } catch (error) {
-                    console.error('Error sending unsubscribe:', error);
-                }
+            const currentState = this.ws.readyState;
+            
+            // Удаляем все обработчики событий чтобы предотвратить утечки и повторные подключения
+            this.ws.onopen = null;
+            this.ws.onmessage = null;
+            this.ws.onerror = null;
+            this.ws.onclose = null;
+            
+            // Закрываем соединение если оно не закрыто
+            if (currentState === WebSocket.OPEN || currentState === WebSocket.CONNECTING) {
+                this.ws.close(1000, 'Intentional close'); // 1000 = нормальное закрытие
             }
             
-            // Закрываем соединение
-            this.ws.close(1000, 'Chart manager destroyed');
+            window.errorLogger?.info('websocket', 'WebSocket cleaned up', { 
+                previousState: currentState
+            });
+            
             this.ws = null;
         }
     }
@@ -1016,9 +904,6 @@ class ChartManager {
         
         this.isDestroyed = true;
         this.isInitialized = false;
-        
-        // Останавливаем анимацию
-        this.stopCandleAnimation();
         
         // Отменяем все таймеры
         if (this.reconnectTimer) {
