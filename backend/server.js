@@ -424,8 +424,32 @@ setInterval(() => {
   });
 }, 250); // каждые 250ms (4 тика в секунду) + интерполяция на клиенте = плавная визуализация
 
-// Создание новой свечи каждые 5 секунд для ВСЕХ генераторов (24/7 работа)
-setInterval(() => {
+// ИСПРАВЛЕНИЕ: Точная синхронизация создания свечей с системным временем
+// Вместо простого setInterval используем выравнивание по сетке времени
+function scheduleNextCandleCreation() {
+  const CANDLE_INTERVAL = 5000; // 5 секунд
+  const now = Date.now();
+  
+  // Вычисляем следующий момент создания свечи (выравнивание по сетке)
+  const nextCandleTime = Math.ceil(now / CANDLE_INTERVAL) * CANDLE_INTERVAL;
+  const delayUntilNextCandle = nextCandleTime - now;
+  
+  logger.debug('candle-schedule', 'Next candle scheduled', {
+    now: now,
+    nextCandleTime: nextCandleTime,
+    delayMs: delayUntilNextCandle,
+    nextCandleDate: new Date(nextCandleTime).toISOString()
+  });
+  
+  setTimeout(() => {
+    createNewCandlesForAllSymbols();
+    // Планируем следующую свечу
+    scheduleNextCandleCreation();
+  }, delayUntilNextCandle);
+}
+
+// Функция создания свечей вынесена отдельно
+function createNewCandlesForAllSymbols() {
   // Блокируем отправку тиков
   isCreatingNewCandle = true;
   
@@ -567,15 +591,18 @@ setInterval(() => {
     console.log(`New candle created for ${symbol} at time ${newCandle.time} (${sentCount} clients)`);
   });
   
-  // РЕШЕНИЕ #4: Увеличиваем задержку с 200ms до 1000ms для стабильной обработки
-  // Это гарантирует что клиенты получат и обработают новую свечу до следующих тиков
+  // ИСПРАВЛЕНИЕ: Уменьшаем задержку до 200ms для более точного тайминга
+  // Клиенты справляются с обработкой быстрее
   setTimeout(() => {
     isCreatingNewCandle = false;
     logger.debug('websocket', 'Tick generation unlocked after new candles', {
       elapsedTime: Date.now() - startTime
     });
-  }, 1000);
-}, 5000); // каждые 5 секунд фиксируем свечу и создаем новую
+  }, 200);
+}
+
+// ИСПРАВЛЕНИЕ: Запускаем точную синхронизацию вместо простого setInterval
+scheduleNextCandleCreation();
 
 // ===== ПЕРСИСТЕНТНОСТЬ =====
 

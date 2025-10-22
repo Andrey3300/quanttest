@@ -35,6 +35,9 @@ class ChartManager {
         // РЕШЕНИЕ #1: Контроль autoScale
         this.isAdjustingScale = false;
         
+        // Таймер для начальной анимации цены
+        this.initialAnimationTimer = null;
+        
         // Защита от схлопывания
         this.MIN_VISIBLE_BARS = 10; // минимальная ширина видимого диапазона
         this.isRestoringRange = false; // флаг восстановления диапазона
@@ -367,8 +370,11 @@ class ChartManager {
                 this.currentPrice = data[data.length - 1].close;
                 
                 // ИСПРАВЛЕНИЕ: Сразу создаем линию цены после загрузки данных
+                // И запускаем немедленное обновление для движения линии
                 if (this.chartType !== 'line') {
                     this.createExpirationOverlay();
+                    // Запускаем микро-симуляцию до получения первого тика
+                    this.startInitialPriceAnimation();
                 }
             }
             
@@ -486,6 +492,12 @@ class ChartManager {
                         });
                     } else if (message.type === 'tick') {
                         // Плавное обновление текущей свечи (не проверяем дубликаты для тиков)
+                        // ИСПРАВЛЕНИЕ: Останавливаем начальную анимацию при получении первого реального тика
+                        if (this.initialAnimationTimer) {
+                            clearInterval(this.initialAnimationTimer);
+                            this.initialAnimationTimer = null;
+                            window.errorLogger?.debug('animation', 'Initial animation stopped - real tick received');
+                        }
                         this.updateCandle(message.data, false);
                     } else if (message.type === 'newCandle') {
                         // Создание новой свечи
@@ -1194,6 +1206,51 @@ class ChartManager {
     lerp(start, end, t) {
         return start + (end - start) * t;
     }
+    
+    // НОВОЕ: Микро-симуляция движения цены до получения первого реального тика
+    // Это решает проблему "замерзшей" синей линии при смене актива
+    startInitialPriceAnimation() {
+        // Останавливаем предыдущую анимацию если есть
+        if (this.initialAnimationTimer) {
+            clearInterval(this.initialAnimationTimer);
+            this.initialAnimationTimer = null;
+        }
+        
+        let tickCount = 0;
+        const MAX_TICKS = 20; // Максимум 20 тиков (5 секунд при 250ms)
+        
+        this.initialAnimationTimer = setInterval(() => {
+            tickCount++;
+            
+            // Останавливаем симуляцию если получили реальный тик или достигли лимита
+            if (this.lastTickTime > 0 || tickCount >= MAX_TICKS) {
+                clearInterval(this.initialAnimationTimer);
+                this.initialAnimationTimer = null;
+                window.errorLogger?.debug('animation', 'Initial price animation stopped', {
+                    reason: this.lastTickTime > 0 ? 'real tick received' : 'max ticks reached',
+                    tickCount: tickCount
+                });
+                return;
+            }
+            
+            // Генерируем очень маленькое случайное изменение (±0.02%)
+            const microChange = (Math.random() - 0.5) * 0.0004; // ±0.02%
+            const newPrice = this.currentPrice * (1 + microChange);
+            
+            // Обновляем только отображение цены и линию, НЕ трогаем свечи
+            this.updatePriceDisplay(newPrice);
+            this.currentPrice = newPrice;
+            
+            // Обновляем линию цены
+            if (this.expirationPriceLine && this.chartType !== 'line') {
+                this.updateExpirationPriceLine();
+            }
+        }, 250); // каждые 250ms
+        
+        window.errorLogger?.debug('animation', 'Initial price animation started', {
+            initialPrice: this.currentPrice
+        });
+    }
 
     // Смена символа (используем переиспользование соединения)
     async changeSymbol(newSymbol) {
@@ -1209,6 +1266,12 @@ class ChartManager {
         }
         this.currentInterpolatedCandle = null;
         this.targetCandle = null;
+        
+        // Останавливаем начальную анимацию если она запущена
+        if (this.initialAnimationTimer) {
+            clearInterval(this.initialAnimationTimer);
+            this.initialAnimationTimer = null;
+        }
         
         // Удаляем линию цены и таймер при смене символа
         this.removeExpirationOverlay();
@@ -1387,6 +1450,12 @@ class ChartManager {
         if (this.animationFrameId) {
             cancelAnimationFrame(this.animationFrameId);
             this.animationFrameId = null;
+        }
+        
+        // Останавливаем начальную анимацию
+        if (this.initialAnimationTimer) {
+            clearInterval(this.initialAnimationTimer);
+            this.initialAnimationTimer = null;
         }
         
         // Останавливаем таймер экспирации
