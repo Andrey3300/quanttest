@@ -144,6 +144,12 @@ function showTradingPage() {
             
             window.chartManager.loadHistoricalData('USD_MXN_OTC').then(() => {
                 // Линия цены создается автоматически после загрузки исторических данных
+                // Запускаем таймер экспирации для candles/bars
+                if (chartType !== 'line' && window.chartTimeframeManager) {
+                    window.chartTimeframeManager.setTimeframe(chartTimeframe, (formatted, timeLeft, tf) => {
+                        window.chartManager.updateExpirationOverlay(tf, formatted, timeLeft);
+                    });
+                }
             });
             window.chartManager.connectWebSocket('USD_MXN_OTC');
         }, 200);

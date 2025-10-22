@@ -1209,4 +1209,36 @@ body {
     display: none;
 }
 
-/* Chart expiration overlay removed - time display is no longer shown */
+/* Chart expiration timer - отображает время до закрытия свечи */
+.chart-expiration-timer {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    background: rgba(26, 31, 46, 0.9);
+    backdrop-filter: blur(10px);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 8px 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    z-index: 10;
+    pointer-events: none;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.chart-expiration-timer .timeframe-label {
+    color: var(--text-secondary);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.chart-expiration-timer .timer-value {
+    color: var(--accent-blue);
+    font-size: 14px;
+    font-weight: 700;
+    font-family: 'Courier New', monospace;
+}
