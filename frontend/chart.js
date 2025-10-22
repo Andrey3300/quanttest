@@ -47,7 +47,8 @@ class ChartManager {
         this.targetCandle = null; // целевое состояние свечи (куда движемся)
         this.currentInterpolatedCandle = null; // текущее интерполированное состояние
         this.interpolationStartTime = null; // время начала интерполяции
-        this.interpolationDuration = 300; // длительность интерполяции (ms) - плавный переход между тиками (замедлено на 50% для реалистичности)
+        this.interpolationDuration = 300; // длительность интерполяции (ms) - ДИНАМИЧЕСКАЯ, зависит от таймфрейма
+        this.baseInterpolationDuration = 300; // базовая длительность для S5 (5 секунд)
         this.animationFrameId = null; // ID для requestAnimationFrame
         this.lastTickTime = 0; // время последнего тика для расчета интерполяции
         
@@ -1115,6 +1116,25 @@ class ChartManager {
         timerElement.innerHTML = `<span class="timeframe-label">${timeframeLabel}</span> <span class="timer-value">${formattedTime}</span>`;
     }
 
+    // Рассчитать оптимальную длительность интерполяции на основе таймфрейма
+    calculateInterpolationDuration() {
+        if (!window.chartTimeframeManager) {
+            return this.baseInterpolationDuration;
+        }
+        
+        const timeframeDuration = window.chartTimeframeManager.getTimeframeDuration(this.timeframe);
+        
+        // Для S5 (5 сек) используем базовую скорость 300ms
+        // Для более длинных таймфреймов увеличиваем пропорционально
+        // Но не линейно, а с коэффициентом замедления
+        // M2 (120 сек) = 300ms * (120/5)^0.7 ≈ 2000ms
+        const ratio = timeframeDuration / 5; // относительно S5
+        const scaledDuration = this.baseInterpolationDuration * Math.pow(ratio, 0.7);
+        
+        // Ограничиваем максимум до 3000ms для очень длинных таймфреймов
+        return Math.min(scaledDuration, 3000);
+    }
+    
     // 🎨 ИНТЕРПОЛЯЦИЯ - плавная анимация между тиками (60fps визуально)
     // Это создает "Binance-level" плавность даже при 20 тиках/сек
     startInterpolation(fromCandle, toCandle) {
@@ -1127,6 +1147,16 @@ class ChartManager {
             cancelAnimationFrame(this.animationFrameId);
             this.animationFrameId = null;
         }
+        
+        // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Рассчитываем длительность на основе таймфрейма
+        this.interpolationDuration = this.calculateInterpolationDuration();
+        
+        window.errorLogger?.debug('interpolation', 'Starting interpolation', {
+            timeframe: this.timeframe,
+            duration: this.interpolationDuration,
+            fromClose: fromCandle.close,
+            toClose: toCandle.close
+        });
         
         // Инициализируем начальное состояние
         this.currentInterpolatedCandle = { ...fromCandle };
