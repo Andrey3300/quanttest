@@ -369,6 +369,10 @@ class ChartManager {
 
             this.ws = new WebSocket(wsUrl);
             
+            // Увеличиваем ID соединения для отслеживания
+            this.connectionId++;
+            const currentConnectionId = this.connectionId;
+            
             window.errorLogger?.info('websocket', 'Creating new WebSocket connection', { 
                 symbol,
                 wsUrl,
@@ -405,6 +409,14 @@ class ChartManager {
                     } else if (message.type === 'unsubscribed') {
                         console.log(`Unsubscribed from ${message.symbol}`);
 
+                    } else if (message.type === 'tick') {
+                        // Обновление текущей свечи
+                        this.updateCandle(message.data, false);
+                        
+                    } else if (message.type === 'newCandle') {
+                        // Новая свеча
+                        this.updateCandle(message.data, true);
+                        
                     } else if (message.type === 'candle') {
                         // Обратная совместимость
                         this.updateCandle(message.data, false);
@@ -859,6 +871,119 @@ class ChartManager {
         
         console.log(`✓ Chart switched to ${newSymbol}`);
 
+    }
+
+    // Остановка анимации свечей
+    stopCandleAnimation() {
+        if (this.animationState.animationFrameId) {
+            cancelAnimationFrame(this.animationState.animationFrameId);
+            this.animationState.animationFrameId = null;
+        }
+        this.animationState.isAnimating = false;
+        this.animationState.displayed = null;
+        this.animationState.target = null;
+        this.animationState.candleData = null;
+    }
+
+    // Обновление целевых значений анимации
+    updateAnimationTarget(candle) {
+        if (!this.animationState.isAnimating) {
+            // Запускаем новую анимацию
+            this.animationState.isAnimating = true;
+            this.animationState.candleData = candle;
+            this.animationState.displayed = {
+                close: candle.close,
+                high: candle.high,
+                low: candle.low
+            };
+            this.animationState.target = {
+                close: candle.close,
+                high: candle.high,
+                low: candle.low
+            };
+            this.animateCandleUpdate();
+        } else {
+            // Обновляем целевые значения
+            this.animationState.target = {
+                close: candle.close,
+                high: candle.high,
+                low: candle.low
+            };
+            this.animationState.candleData = candle;
+        }
+    }
+
+    // Плавная анимация обновления свечи
+    animateCandleUpdate() {
+        if (!this.animationState.isAnimating || !this.candleSeries) {
+            return;
+        }
+
+        const { displayed, target, candleData } = this.animationState;
+        
+        // Линейная интерполяция
+        displayed.close += (target.close - displayed.close) * this.lerpFactor;
+        displayed.high += (target.high - displayed.high) * this.lerpFactor;
+        displayed.low += (target.low - displayed.low) * this.lerpFactor;
+        
+        // Обновляем свечу с новыми интерполированными значениями
+        const animatedCandle = {
+            time: candleData.time,
+            open: candleData.open,
+            high: displayed.high,
+            low: displayed.low,
+            close: displayed.close,
+            volume: candleData.volume
+        };
+        
+        this.candleSeries.update(animatedCandle);
+        
+        // Проверяем достигли ли целевых значений
+        const closeEnough = Math.abs(target.close - displayed.close) < this.animationThreshold &&
+                           Math.abs(target.high - displayed.high) < this.animationThreshold &&
+                           Math.abs(target.low - displayed.low) < this.animationThreshold;
+        
+        if (!closeEnough) {
+            // Продолжаем анимацию
+            this.animationState.animationFrameId = requestAnimationFrame(() => this.animateCandleUpdate());
+        } else {
+            // Анимация завершена, устанавливаем точные значения
+            displayed.close = target.close;
+            displayed.high = target.high;
+            displayed.low = target.low;
+            
+            const finalCandle = {
+                time: candleData.time,
+                open: candleData.open,
+                high: target.high,
+                low: target.low,
+                close: target.close,
+                volume: candleData.volume
+            };
+            
+            this.candleSeries.update(finalCandle);
+        }
+    }
+
+    // Закрытие WebSocket соединения
+    closeWebSocket() {
+        if (this.ws) {
+            // Явно отписываемся от текущего символа
+            if (this.symbol) {
+                try {
+                    this.ws.send(JSON.stringify({
+                        type: 'unsubscribe',
+                        symbol: this.symbol
+                    }));
+                } catch (error) {
+                    console.error('Error sending unsubscribe:', error);
+                }
+            }
+            
+            // Закрываем соединение
+            this.ws.close(1000, 'Chart manager destroyed');
+            this.ws = null;
+        }
     }
 
     // Очистка ресурсов
