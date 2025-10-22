@@ -338,8 +338,10 @@ class ChartManager {
             : `ws://${window.location.host}/ws/chart`;
 
         try {
-            // ПРОБЛЕМА WebSocket РЕШЕНА: Переиспользуем одно соединение
-            // Если соединение уже есть и оно активно, просто меняем подписку
+            // КРИТИЧЕСКОЕ УЛУЧШЕНИЕ: Переиспользование WebSocket соединения
+            // ПРОБЛЕМА: Раньше создавалось множество соединений при каждой смене символа
+            // РЕШЕНИЕ: Переиспользуем одно соединение, просто меняем подписку
+            // ЭФФЕКТ: Снижение нагрузки на сервер, улучшение стабильности
             if (this.ws && this.ws.readyState === WebSocket.OPEN) {
                 window.errorLogger?.info('websocket', 'Reusing existing connection for symbol change', { 
                     oldSymbol: this.symbol,

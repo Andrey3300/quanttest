@@ -51,15 +51,16 @@ class ChartGenerator {
     }
 
     // Определение точности цены на основе базовой цены
+    // УЛУЧШЕНИЕ: Адаптивная точность для различных ценовых диапазонов
     getPricePrecision(price) {
-        if (price >= 10000) return 1;     // Например UAH_USD_OTC: 68623.2
-        if (price >= 1000) return 2;      // Например BTC: 68750.23
-        if (price >= 100) return 3;       // Например ETH: 3450.123
-        if (price >= 10) return 4;        // Например USD/MXN: 18.9167
-        if (price >= 1) return 4;         // Например EUR/USD: 1.0850
-        if (price >= 0.1) return 5;       // Например DOGE: 0.14523
-        if (price >= 0.01) return 6;      // Например маленькие пары
-        return 8;                          // Для очень маленьких цен
+        if (price >= 10000) return 1;     // Крупные активы: UAH_USD_OTC: 68623.2
+        if (price >= 1000) return 2;      // Криптовалюты: BTC: 68750.23
+        if (price >= 100) return 3;       // Средние криптовалюты: ETH: 3450.123
+        if (price >= 10) return 4;        // Валютные пары: USD/MXN: 18.9167
+        if (price >= 1) return 4;         // Основные пары: EUR/USD: 1.0850
+        if (price >= 0.1) return 5;       // Альткоины: DOGE: 0.14523
+        if (price >= 0.01) return 6;      // Микро-пары
+        return 8;                          // Минимальные активы
     }
 
     // Генерация одной свечи с реалистичным OHLC
@@ -191,8 +192,9 @@ class ChartGenerator {
             });
         }
         
-        // Генерируем полноценную свечу с вариацией сразу
+        // КРИТИЧЕСКОЕ УЛУЧШЕНИЕ: Генерируем полноценную свечу с вариацией сразу
         // Используем существующий метод generateCandle() вместо плоской свечи
+        // Это решает проблему одинаковых свечей (open=high=low=close)
         const candle = this.generateCandle(timestamp * 1000, openPrice);
         
         this.candles.push(candle);
