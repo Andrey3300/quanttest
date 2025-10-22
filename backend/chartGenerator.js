@@ -79,9 +79,9 @@ class ChartGenerator {
         // Ограничение максимального размера фитиля относительно тела свечи
         const bodySize = Math.abs(close - openPrice);
 
-        const maxWickMultiplier = bodySize > 0 ? 2.0 : 0.5; // фитиль не больше 2x тела
+        const maxWickMultiplier = bodySize > 0 ? 0.4 : 0.3; // фитиль намного меньше тела (уменьшено с 2.0 до 0.4)
 
-        const maxWickSize = bodySize > 0 ? bodySize * maxWickMultiplier : this.basePrice * 0.005;
+        const maxWickSize = bodySize > 0 ? bodySize * maxWickMultiplier : this.basePrice * 0.002;
         
         // High должен быть выше open и close
         const maxPrice = Math.max(openPrice, close);
@@ -348,8 +348,8 @@ class ChartGenerator {
             this.currentCandleState.targetHigh = this.currentCandleState.close;
         } else {
             // Иногда создаем фитиль вверх для реалистичности
-            if (Math.random() < 0.03) { // уменьшена вероятность с 0.08 до 0.03
-                const wickHigh = this.currentCandleState.close * (1 + Math.abs(this.randomNormal(0, microVolatility * 0.3))); // уменьшен множитель с 0.5 до 0.3
+            if (Math.random() < 0.01) { // уменьшена вероятность с 0.03 до 0.01 для коротких фитилей
+                const wickHigh = this.currentCandleState.close * (1 + Math.abs(this.randomNormal(0, microVolatility * 0.15))); // уменьшен множитель с 0.3 до 0.15
                 if (wickHigh > this.currentCandleState.high && wickHigh <= this.basePrice * 1.1) {
                     this.currentCandleState.high = parseFloat(wickHigh.toFixed(precision));
                     this.currentCandleState.targetHigh = wickHigh;
@@ -362,8 +362,8 @@ class ChartGenerator {
             this.currentCandleState.targetLow = this.currentCandleState.close;
         } else {
             // Иногда создаем фитиль вниз для реалистичности
-            if (Math.random() < 0.03) { // уменьшена вероятность с 0.08 до 0.03
-                const wickLow = this.currentCandleState.close * (1 - Math.abs(this.randomNormal(0, microVolatility * 0.3))); // уменьшен множитель с 0.5 до 0.3
+            if (Math.random() < 0.01) { // уменьшена вероятность с 0.03 до 0.01 для коротких фитилей
+                const wickLow = this.currentCandleState.close * (1 - Math.abs(this.randomNormal(0, microVolatility * 0.15))); // уменьшен множитель с 0.3 до 0.15
                 if (wickLow < this.currentCandleState.low && wickLow >= this.basePrice * 0.9) {
                     this.currentCandleState.low = parseFloat(wickLow.toFixed(precision));
                     this.currentCandleState.targetLow = wickLow;
