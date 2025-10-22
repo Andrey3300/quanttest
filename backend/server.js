@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const WebSocket = require('ws');
 const http = require('http');
-const { getGenerator } = require('./chartGenerator');
+const { getGenerator, saveAllGenerators, initializeAllGenerators, SYMBOL_CONFIG } = require('./chartGenerator');
 const logger = require('./errorLogger');
 require('dotenv').config();
 
@@ -288,6 +288,13 @@ app.get('/api/chart/history', (req, res) => {
   }
 });
 
+// ===== ИНИЦИАЛИЗАЦИЯ ГЕНЕРАТОРОВ 24/7 =====
+
+// Инициализируем ВСЕ генераторы при старте сервера
+console.log('🚀 Initializing chart generators for 24/7 operation...');
+initializeAllGenerators();
+console.log('✅ All chart generators are running!');
+
 // ===== WEBSOCKET SERVER =====
 
 // Создание WebSocket сервера
@@ -417,103 +424,117 @@ setInterval(() => {
   });
 }, 250); // каждые 250ms (4 тика в секунду) + интерполяция на клиенте = плавная визуализация
 
-// Создание новой свечи каждые 5 секунд
+// Создание новой свечи каждые 5 секунд для ВСЕХ генераторов (24/7 работа)
 setInterval(() => {
   // Блокируем отправку тиков
   isCreatingNewCandle = true;
   
   // РЕШЕНИЕ #5: Логируем начало создания новых свечей
   const startTime = Date.now();
-  logger.debug('websocket', 'Creating new candles for all symbols', {
-    symbolCount: subscriptions.size,
+  const totalSymbols = Object.keys(SYMBOL_CONFIG).length;
+  
+  logger.debug('websocket', 'Creating new candles for ALL symbols (24/7)', {
+    totalSymbols: totalSymbols,
+    symbolsWithSubscribers: subscriptions.size,
     timestamp: startTime
   });
   
-  subscriptions.forEach((clients, symbol) => {
-    if (clients.size > 0) {
-      const generator = getGenerator(symbol);
-      
-      // ЗАЩИТА: Проверяем что генератор инициализирован с данными
-      if (!generator.candles || generator.candles.length === 0) {
-        logger.warn('websocket', 'Generator not initialized, skipping new candle', { symbol });
-        return;
-      }
-      
-      const newCandle = generator.generateNextCandle();
-      
-      // Проверка: убедимся что время - это число
-      if (typeof newCandle.time !== 'number' || isNaN(newCandle.time)) {
-        logger.error('websocket', 'Invalid new candle time format', { 
-          symbol: symbol,
-          candle: newCandle
-        });
-        console.error('Invalid new candle time format:', newCandle.time);
-        return;
-      }
-      
-      // КРИТИЧЕСКАЯ ВАЛИДАЦИЯ: Проверяем непрерывность перед отправкой
-      const allCandles = generator.candles;
-      if (allCandles.length >= 2) {
-        const previousCandle = allCandles[allCandles.length - 2]; // Предпоследняя свеча
-        const currentCandle = allCandles[allCandles.length - 1];  // Последняя свеча (новая)
-        
-        if (currentCandle.open !== previousCandle.close) {
-          logger.error('websocket', '❌ CONTINUITY BROKEN before sending!', {
-            symbol: symbol,
-            previousTime: previousCandle.time,
-            previousClose: previousCandle.close,
-            currentTime: currentCandle.time,
-            currentOpen: currentCandle.open,
-            difference: Math.abs(currentCandle.open - previousCandle.close)
-          });
-          console.error(`❌ CONTINUITY BROKEN for ${symbol}: prev.close=${previousCandle.close} !== current.open=${currentCandle.open}`);
-        } else {
-          logger.debug('websocket', '✅ Continuity verified before sending', {
-            symbol: symbol,
-            price: currentCandle.open
-          });
-        }
-      }
-      
-      // РЕШЕНИЕ #5: Валидация OHLC перед отправкой
-      const isValidOHLC = newCandle.high >= newCandle.low &&
-                          newCandle.high >= newCandle.open &&
-                          newCandle.high >= newCandle.close &&
-                          newCandle.low <= newCandle.open &&
-                          newCandle.low <= newCandle.close;
-      
-      if (!isValidOHLC) {
-        logger.error('websocket', 'Invalid OHLC data in new candle', {
-          symbol: symbol,
-          candle: newCandle
-        });
-        console.error('Invalid OHLC data:', newCandle);
-        return;
-      }
-      
-      const message = JSON.stringify({
-        type: 'newCandle',
-        symbol,
-        data: newCandle
-      });
-      
-      // Отправляем всем подписанным клиентам
-      let sentCount = 0;
-      clients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN) {
-          client.send(message);
-          sentCount++;
-        }
-      });
-      
-      logger.logCandle('New candle sent to clients', symbol, newCandle);
-      logger.debug('websocket', 'New candle broadcast complete', {
+  // КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: Генерируем свечи для ВСЕХ символов, не только с подписчиками
+  Object.keys(SYMBOL_CONFIG).forEach(symbol => {
+    const generator = getGenerator(symbol);
+    
+    // ЗАЩИТА: Проверяем что генератор инициализирован с данными
+    if (!generator.candles || generator.candles.length === 0) {
+      logger.warn('websocket', 'Generator not initialized, skipping new candle', { symbol });
+      return;
+    }
+    
+    const newCandle = generator.generateNextCandle();
+    
+    // Отправляем клиентам ТОЛЬКО если есть подписчики
+    const clients = subscriptions.get(symbol);
+    if (!clients || clients.size === 0) {
+      // Нет подписчиков - просто логируем
+      logger.debug('websocket', 'New candle generated (no subscribers)', {
         symbol: symbol,
         time: newCandle.time,
-        clientCount: sentCount
+        candleCount: generator.candles.length
       });
-      console.log(`New candle created for ${symbol} at time ${newCandle.time}`);
+      return;
     }
+    
+    // Проверка: убедимся что время - это число
+    if (typeof newCandle.time !== 'number' || isNaN(newCandle.time)) {
+      logger.error('websocket', 'Invalid new candle time format', { 
+        symbol: symbol,
+        candle: newCandle
+      });
+      console.error('Invalid new candle time format:', newCandle.time);
+      return;
+    }
+    
+    // КРИТИЧЕСКАЯ ВАЛИДАЦИЯ: Проверяем непрерывность перед отправкой
+    const allCandles = generator.candles;
+    if (allCandles.length >= 2) {
+      const previousCandle = allCandles[allCandles.length - 2]; // Предпоследняя свеча
+      const currentCandle = allCandles[allCandles.length - 1];  // Последняя свеча (новая)
+      
+      if (currentCandle.open !== previousCandle.close) {
+        logger.error('websocket', '❌ CONTINUITY BROKEN before sending!', {
+          symbol: symbol,
+          previousTime: previousCandle.time,
+          previousClose: previousCandle.close,
+          currentTime: currentCandle.time,
+          currentOpen: currentCandle.open,
+          difference: Math.abs(currentCandle.open - previousCandle.close)
+        });
+        console.error(`❌ CONTINUITY BROKEN for ${symbol}: prev.close=${previousCandle.close} !== current.open=${currentCandle.open}`);
+      } else {
+        logger.debug('websocket', '✅ Continuity verified before sending', {
+          symbol: symbol,
+          price: currentCandle.open
+        });
+      }
+    }
+    
+    // РЕШЕНИЕ #5: Валидация OHLC перед отправкой
+    const isValidOHLC = newCandle.high >= newCandle.low &&
+                        newCandle.high >= newCandle.open &&
+                        newCandle.high >= newCandle.close &&
+                        newCandle.low <= newCandle.open &&
+                        newCandle.low <= newCandle.close;
+    
+    if (!isValidOHLC) {
+      logger.error('websocket', 'Invalid OHLC data in new candle', {
+        symbol: symbol,
+        candle: newCandle
+      });
+      console.error('Invalid OHLC data:', newCandle);
+      return;
+    }
+    
+    const message = JSON.stringify({
+      type: 'newCandle',
+      symbol,
+      data: newCandle
+    });
+    
+    // Отправляем всем подписанным клиентам
+    let sentCount = 0;
+    clients.forEach(client => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(message);
+        sentCount++;
+      }
+    });
+    
+    logger.logCandle('New candle sent to clients', symbol, newCandle);
+    logger.debug('websocket', 'New candle broadcast complete', {
+      symbol: symbol,
+      time: newCandle.time,
+      clientCount: sentCount
+    });
+    console.log(`New candle created for ${symbol} at time ${newCandle.time} (${sentCount} clients)`);
   });
   
   // РЕШЕНИЕ #4: Увеличиваем задержку с 200ms до 1000ms для стабильной обработки
@@ -526,37 +547,64 @@ setInterval(() => {
   }, 1000);
 }, 5000); // каждые 5 секунд фиксируем свечу и создаем новую
 
-// Очистка неактивных генераторов каждые 5 минут
-const chartGeneratorModule = require('./chartGenerator');
+// ===== ПЕРСИСТЕНТНОСТЬ =====
+
+// Периодическое сохранение всех генераторов каждые 5 минут
 setInterval(() => {
-  const generators = chartGeneratorModule.generators;
-  
-  if (generators && generators.size > 0) {
-    const inactiveSymbols = [];
-    
-    generators.forEach((generator, symbol) => {
-      const hasSubscribers = subscriptions.has(symbol) && subscriptions.get(symbol).size > 0;
-      
-      if (!hasSubscribers) {
-        inactiveSymbols.push(symbol);
-      }
-    });
-    
-    // Удаляем неактивные генераторы
-    inactiveSymbols.forEach(symbol => {
-      generators.delete(symbol);
-      console.log(`Cleaned up inactive generator for ${symbol}`);
-    });
-    
-    if (inactiveSymbols.length > 0) {
-      logger.info('cleanup', 'Inactive generators cleaned', {
-        cleaned: inactiveSymbols.length,
-        remaining: generators.size,
-        symbols: inactiveSymbols
-      });
-    }
-  }
+  logger.info('persistence', 'Auto-saving all generators...');
+  const result = saveAllGenerators();
+  console.log(`💾 Auto-save complete: ${result.saved} generators saved, ${result.failed} failed`);
 }, 5 * 60 * 1000); // каждые 5 минут
+
+// Graceful shutdown - сохраняем все данные при остановке сервера
+const gracefulShutdown = () => {
+  console.log('\n🛑 Shutting down gracefully...');
+  logger.info('shutdown', 'Graceful shutdown initiated');
+  
+  // Сохраняем все генераторы
+  console.log('💾 Saving all generators...');
+  const result = saveAllGenerators();
+  console.log(`✅ Saved ${result.saved} generators`);
+  
+  // Закрываем WebSocket соединения
+  wss.clients.forEach(client => {
+    client.close(1000, 'Server shutting down');
+  });
+  
+  // Закрываем HTTP сервер
+  server.close(() => {
+    console.log('✅ Server closed');
+    logger.info('shutdown', 'Server shutdown complete');
+    process.exit(0);
+  });
+  
+  // Принудительное завершение через 10 секунд
+  setTimeout(() => {
+    console.error('⚠️  Forced shutdown after timeout');
+    process.exit(1);
+  }, 10000);
+};
+
+// Обработчики сигналов
+process.on('SIGTERM', gracefulShutdown);
+process.on('SIGINT', gracefulShutdown);
+
+// Обработка необработанных ошибок
+process.on('uncaughtException', (error) => {
+  console.error('💥 Uncaught Exception:', error);
+  logger.error('process', 'Uncaught exception', { 
+    error: error.message, 
+    stack: error.stack 
+  });
+  gracefulShutdown();
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('💥 Unhandled Rejection at:', promise, 'reason:', reason);
+  logger.error('process', 'Unhandled rejection', { 
+    reason: String(reason) 
+  });
+});
 
 server.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);

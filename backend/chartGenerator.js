@@ -95,8 +95,8 @@ class ChartGenerator {
         };
     }
 
-    // Генерация исторических данных за 7 дней с шагом 5 секунд
-    generateHistoricalData(days = 7, intervalSeconds = 5) {
+    // Генерация исторических данных за 3 дня с шагом 5 секунд
+    generateHistoricalData(days = 3, intervalSeconds = 5) {
         const candles = [];
         const now = Date.now();
         
@@ -105,7 +105,7 @@ class ChartGenerator {
         const alignedCurrentTime = Math.floor(currentTimeSeconds / intervalSeconds) * intervalSeconds;
         const alignedNow = alignedCurrentTime * 1000;
         
-        const startTime = alignedNow - (days * 24 * 60 * 60 * 1000); // 7 дней назад
+        const startTime = alignedNow - (days * 24 * 60 * 60 * 1000); // N дней назад
         const totalCandles = Math.floor((alignedNow - startTime) / (intervalSeconds * 1000));
         
         let currentPrice = this.basePrice;
@@ -188,10 +188,22 @@ class ChartGenerator {
         
         this.candles.push(candle);
         
-        // Ограничиваем размер массива (храним последние 7 дней)
-        const maxCandles = 7 * 24 * 60 * 12; // 7 дней * 5-секундные свечи
-        if (this.candles.length > maxCandles) {
-            this.candles.shift();
+        // СКОЛЬЗЯЩЕЕ ОКНО: Ограничиваем размер массива (храним последние 3 дня)
+        // 3 дня = 51,840 свечей. При достижении 52,000 -> обрезаем до 51,500
+        const TRIM_THRESHOLD = 52000;
+        const KEEP_CANDLES = 51500;
+        
+        if (this.candles.length > TRIM_THRESHOLD) {
+            const toRemove = this.candles.length - KEEP_CANDLES;
+            this.candles = this.candles.slice(toRemove);
+            
+            logger.info('memory', 'Candle memory trimmed (sliding window)', {
+                symbol: this.symbol,
+                removed: toRemove,
+                remaining: this.candles.length,
+                threshold: TRIM_THRESHOLD,
+                keepCandles: KEEP_CANDLES
+            });
         }
         
         // Инициализируем состояние текущей свечи для плавных обновлений
@@ -393,15 +405,90 @@ class ChartGenerator {
             return matchFrom && matchTo;
         });
     }
+
+    // ПЕРСИСТЕНТНОСТЬ: Сохранение последних 1000 свечей на диск
+    toJSON() {
+        // Сохраняем только последние 1000 свечей для экономии места
+        const SAVE_LAST_N = 1000;
+        const candlesToSave = this.candles.slice(-SAVE_LAST_N);
+        
+        return {
+            symbol: this.symbol,
+            basePrice: this.basePrice,
+            currentPrice: this.currentPrice,
+            volatility: this.volatility,
+            drift: this.drift,
+            meanReversionSpeed: this.meanReversionSpeed,
+            candles: candlesToSave,
+            currentCandleState: this.currentCandleState,
+            savedAt: Date.now(),
+            savedCandleCount: candlesToSave.length
+        };
+    }
+
+    // ПЕРСИСТЕНТНОСТЬ: Восстановление из сохраненных данных
+    fromJSON(data) {
+        if (!data || !data.candles || data.candles.length === 0) {
+            logger.warn('persistence', 'No valid data to restore', { symbol: this.symbol });
+            return false;
+        }
+        
+        // Восстанавливаем состояние
+        this.currentPrice = data.currentPrice || this.basePrice;
+        this.currentCandleState = data.currentCandleState || null;
+        
+        // Генерируем 3 дня истории
+        this.generateHistoricalData();
+        
+        // Теперь объединяем с сохраненными свечами
+        const savedCandles = data.candles;
+        const lastSavedCandle = savedCandles[savedCandles.length - 1];
+        const lastGeneratedCandle = this.candles[this.candles.length - 1];
+        
+        // Проверяем есть ли разрыв во времени
+        const timeDiff = lastSavedCandle.time - lastGeneratedCandle.time;
+        
+        if (timeDiff > 0) {
+            // Сохраненные свечи новее - добавляем их
+            logger.info('persistence', 'Merging saved candles with generated history', {
+                symbol: this.symbol,
+                generatedCount: this.candles.length,
+                savedCount: savedCandles.length,
+                timeDiff: timeDiff,
+                lastGeneratedTime: lastGeneratedCandle.time,
+                lastSavedTime: lastSavedCandle.time
+            });
+            
+            // Добавляем только свечи которые новее чем сгенерированные
+            const newCandles = savedCandles.filter(c => c.time > lastGeneratedCandle.time);
+            this.candles.push(...newCandles);
+            
+            // Обновляем currentPrice из последней свечи
+            if (newCandles.length > 0) {
+                this.currentPrice = newCandles[newCandles.length - 1].close;
+            }
+        } else {
+            logger.info('persistence', 'Saved data is older than generated, using generated', {
+                symbol: this.symbol,
+                timeDiff: timeDiff
+            });
+        }
+        
+        logger.info('persistence', 'Data restored successfully', {
+            symbol: this.symbol,
+            totalCandles: this.candles.length,
+            currentPrice: this.currentPrice
+        });
+        
+        return true;
+    }
 }
 
 // Singleton инстансы для разных символов
 const generators = new Map();
 
-function getGenerator(symbol) {
-    if (!generators.has(symbol)) {
-        // Настройки для разных символов с уникальными паттернами
-        const config = {
+// Конфигурация всех символов
+const SYMBOL_CONFIG = {
             // Currencies - умеренная волатильность для естественного вида как USD/MXN
             'USD_MXN_OTC': { basePrice: 18.9167, volatility: 0.002, drift: 0.0 },
             'EUR_USD_OTC': { basePrice: 1.0850, volatility: 0.0015, drift: 0.0 },
@@ -468,9 +555,11 @@ function getGenerator(symbol) {
             'NATGAS_OTC': { basePrice: 3.2, volatility: 0.0028, drift: 0.0 },
             'PALLADIUM_OTC': { basePrice: 1050, volatility: 0.009, drift: 0.0, meanReversionSpeed: 0.01 },
             'PLATINUM_OTC': { basePrice: 980, volatility: 0.009, drift: 0.0, meanReversionSpeed: 0.01 }
-        };
-        
-        const symbolConfig = config[symbol] || { basePrice: 100, volatility: 0.002, drift: 0.0 };
+};
+
+function getGenerator(symbol) {
+    if (!generators.has(symbol)) {
+        const symbolConfig = SYMBOL_CONFIG[symbol] || { basePrice: 100, volatility: 0.002, drift: 0.0 };
         const generator = new ChartGenerator(
             symbol,
             symbolConfig.basePrice,
@@ -494,4 +583,144 @@ function getGenerator(symbol) {
     return generators.get(symbol);
 }
 
-module.exports = { ChartGenerator, getGenerator, generators };
+// ПЕРСИСТЕНТНОСТЬ: Сохранение всех генераторов на диск
+const fs = require('fs');
+const path = require('path');
+
+const DATA_DIR = path.join(__dirname, '..', 'data');
+
+// Создаем директорию для данных если её нет
+function ensureDataDir() {
+    if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+        logger.info('persistence', 'Data directory created', { path: DATA_DIR });
+    }
+}
+
+// Сохранение одного генератора
+function saveGenerator(symbol) {
+    try {
+        ensureDataDir();
+        
+        const generator = generators.get(symbol);
+        if (!generator) {
+            logger.warn('persistence', 'Generator not found for saving', { symbol });
+            return false;
+        }
+        
+        const data = generator.toJSON();
+        const filename = path.join(DATA_DIR, `${symbol}.json`);
+        
+        fs.writeFileSync(filename, JSON.stringify(data, null, 2), 'utf8');
+        
+        logger.debug('persistence', 'Generator saved', { 
+            symbol, 
+            filename,
+            candleCount: data.savedCandleCount 
+        });
+        
+        return true;
+    } catch (error) {
+        logger.error('persistence', 'Failed to save generator', { 
+            symbol, 
+            error: error.message 
+        });
+        return false;
+    }
+}
+
+// Загрузка одного генератора
+function loadGenerator(symbol) {
+    try {
+        const filename = path.join(DATA_DIR, `${symbol}.json`);
+        
+        if (!fs.existsSync(filename)) {
+            logger.debug('persistence', 'No saved data found', { symbol, filename });
+            return null;
+        }
+        
+        const data = JSON.parse(fs.readFileSync(filename, 'utf8'));
+        
+        logger.info('persistence', 'Generator data loaded from file', { 
+            symbol,
+            candleCount: data.savedCandleCount,
+            savedAt: new Date(data.savedAt).toISOString()
+        });
+        
+        return data;
+    } catch (error) {
+        logger.error('persistence', 'Failed to load generator', { 
+            symbol, 
+            error: error.message 
+        });
+        return null;
+    }
+}
+
+// Сохранение всех генераторов
+function saveAllGenerators() {
+    logger.info('persistence', 'Saving all generators...', { count: generators.size });
+    
+    let saved = 0;
+    let failed = 0;
+    
+    generators.forEach((generator, symbol) => {
+        if (saveGenerator(symbol)) {
+            saved++;
+        } else {
+            failed++;
+        }
+    });
+    
+    logger.info('persistence', 'All generators saved', { 
+        total: generators.size,
+        saved,
+        failed
+    });
+    
+    return { saved, failed };
+}
+
+// Инициализация всех генераторов (вызывается при старте сервера)
+function initializeAllGenerators() {
+    logger.info('initialization', 'Initializing all generators for 24/7 operation...');
+    
+    const symbols = Object.keys(SYMBOL_CONFIG);
+    let initialized = 0;
+    let restored = 0;
+    
+    symbols.forEach(symbol => {
+        // Пытаемся загрузить сохраненные данные
+        const savedData = loadGenerator(symbol);
+        
+        // Получаем генератор (создаст новый если нет)
+        const generator = getGenerator(symbol);
+        
+        // Если есть сохраненные данные - восстанавливаем
+        if (savedData && generator.fromJSON(savedData)) {
+            restored++;
+        }
+        
+        initialized++;
+    });
+    
+    logger.info('initialization', 'All generators initialized', {
+        total: symbols.length,
+        initialized,
+        restored,
+        fresh: initialized - restored
+    });
+    
+    console.log(`✅ Initialized ${initialized} chart generators (${restored} restored from disk, ${initialized - restored} fresh)`);
+    
+    return { initialized, restored };
+}
+
+module.exports = { 
+    ChartGenerator, 
+    getGenerator, 
+    generators,
+    saveAllGenerators,
+    initializeAllGenerators,
+    SYMBOL_CONFIG
+};
