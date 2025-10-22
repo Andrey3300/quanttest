@@ -48,9 +48,10 @@ class ChartManager {
         this.animationFrameId = null; // ID для requestAnimationFrame
         this.lastTickTime = 0; // время последнего тика для расчета интерполяции
         
-        // Линия экспирации на графике (для отображения таймера экспирации на y-axis)
-        this.expirationPriceLine = null;
-        this.currentPrice = null; // текущая цена для обновления линии экспирации
+        // HTML оверлей для отображения времени экспирации рядом со свечой
+        this.expirationOverlay = null;
+        this.currentPrice = null; // текущая цена для обновления позиции оверлея
+        this.expirationPriceLine = null; // PriceLine для отображения линии и цены справа (на оси Y)
     }
 
     // Инициализация графика
@@ -214,6 +215,11 @@ class ChartManager {
         
         // УСИЛЕННАЯ ЗАЩИТА ОТ СХЛОПЫВАНИЯ графика через мониторинг диапазона
         this.chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+            // Обновляем позицию оверлея экспирации при скролле/зуме
+            if (this.expirationOverlay && this.currentPrice) {
+                this.updateExpirationOverlayPosition();
+            }
+            
             if (!range || this.isRestoringRange || !this.isInitialized) return;
             
             // УЛУЧШЕНИЕ: Дополнительная проверка на корректность диапазона
@@ -982,40 +988,67 @@ class ChartManager {
             priceEl.dataset.prevPrice = price;
         }
         
-        // Обновляем текущую цену для линии экспирации
+        // Обновляем текущую цену для оверлея экспирации
         this.currentPrice = price;
         
-        // Обновляем позицию линии экспирации (если она существует)
-        if (this.expirationPriceLine && this.chartType !== 'line') {
-            this.updateExpirationPriceLinePosition(price);
+        // Обновляем позицию оверлея экспирации (если он существует)
+        if (this.expirationOverlay && this.chartType !== 'line') {
+            this.updateExpirationOverlayPosition();
         }
     }
     
-    // Создать линию экспирации на графике
-    createExpirationPriceLine() {
-        // Удаляем старую линию если есть
-        this.removeExpirationPriceLine();
+    // Создать HTML оверлей для времени экспирации
+    createExpirationOverlay() {
+        // Удаляем старый оверлей если есть
+        this.removeExpirationOverlay();
         
+        if (!this.currentPrice) return;
+        
+        // Создаем контейнер для оверлея
+        const chartContainer = document.getElementById('chart');
+        if (!chartContainer) return;
+        
+        // Создаем HTML элемент для оверлея
+        this.expirationOverlay = document.createElement('div');
+        this.expirationOverlay.className = 'expiration-overlay';
+        this.expirationOverlay.innerHTML = `
+            <div class="expiration-time"></div>
+            <div class="time-to-expiration"></div>
+        `;
+        
+        // Добавляем в контейнер графика
+        chartContainer.parentElement.appendChild(this.expirationOverlay);
+        
+        // Создаем PriceLine для отображения линии и цены справа (без title)
         const activeSeries = this.getActiveSeries();
-        if (!activeSeries || !this.currentPrice) return;
+        if (activeSeries) {
+            this.expirationPriceLine = activeSeries.createPriceLine({
+                price: this.currentPrice,
+                color: '#4f9fff',
+                lineWidth: 2,
+                lineStyle: LightweightCharts.LineStyle.Solid,
+                axisLabelVisible: true,
+                title: '', // пустой title - только цена справа
+                axisLabelColor: '#4f9fff',
+                axisLabelTextColor: '#ffffff'
+            });
+        }
         
-        // Создаем новую линию экспирации
-        this.expirationPriceLine = activeSeries.createPriceLine({
-            price: this.currentPrice,
-            color: '#4f9fff',
-            lineWidth: 2,
-            lineStyle: LightweightCharts.LineStyle.Solid,
-            axisLabelVisible: true,
-            title: `${this.timeframe} 00:00`,
-            axisLabelColor: '#4f9fff',
-            axisLabelTextColor: '#ffffff'
-        });
+        // Первоначальное обновление позиции
+        this.updateExpirationOverlayPosition();
         
-        window.errorLogger?.info('chart', 'Expiration price line created');
+        window.errorLogger?.info('chart', 'Expiration overlay created');
     }
     
-    // Удалить линию экспирации
-    removeExpirationPriceLine() {
+    // Удалить оверлей экспирации
+    removeExpirationOverlay() {
+        // Удаляем HTML оверлей
+        if (this.expirationOverlay) {
+            this.expirationOverlay.remove();
+            this.expirationOverlay = null;
+        }
+        
+        // Удаляем PriceLine (линия и цена справа)
         if (this.expirationPriceLine) {
             const activeSeries = this.getActiveSeries();
             if (activeSeries) {
@@ -1029,64 +1062,94 @@ class ChartManager {
         }
     }
     
-    // Обновить позицию линии экспирации
-    updateExpirationPriceLinePosition(price) {
-        if (!this.expirationPriceLine) return;
+    // Обновить позицию оверлея экспирации
+    updateExpirationOverlayPosition() {
+        if (!this.expirationOverlay || !this.currentPrice) return;
         
         const activeSeries = this.getActiveSeries();
         if (!activeSeries) return;
         
         try {
-            // Обновляем цену линии (это переместит её по y-axis)
-            activeSeries.removePriceLine(this.expirationPriceLine);
+            // Получаем данные последней свечи
+            const data = activeSeries.data();
+            if (!data || data.length === 0) return;
             
-            const currentTitle = this.expirationPriceLine.options().title || `${this.timeframe} 00:00`;
+            const lastCandle = data[data.length - 1];
             
-            this.expirationPriceLine = activeSeries.createPriceLine({
-                price: price,
-                color: '#4f9fff',
-                lineWidth: 2,
-                lineStyle: LightweightCharts.LineStyle.Solid,
-                axisLabelVisible: true,
-                title: currentTitle,
-                axisLabelColor: '#4f9fff',
-                axisLabelTextColor: '#ffffff'
-            });
+            // Конвертируем координаты последней свечи в пиксели
+            const timeScale = this.chart.timeScale();
+            const priceScale = activeSeries.priceScale();
+            
+            const x = timeScale.timeToCoordinate(lastCandle.time);
+            const y = priceScale.priceToCoordinate(this.currentPrice);
+            
+            if (x === null || y === null) return;
+            
+            // Получаем размеры контейнера графика
+            const chartContainer = document.getElementById('chart');
+            if (!chartContainer) return;
+            
+            const containerRect = chartContainer.parentElement.getBoundingClientRect();
+            
+            // Позиционируем оверлей рядом со свечой (справа от последней свечи)
+            const offsetX = 15; // отступ от свечи (~1см на экране)
+            this.expirationOverlay.style.left = `${x + offsetX}px`;
+            this.expirationOverlay.style.top = `${y}px`;
+            this.expirationOverlay.style.transform = 'translateY(-50%)';
+            
+            // Обновляем PriceLine для отображения линии и цены справа
+            if (this.expirationPriceLine) {
+                const activeSeries = this.getActiveSeries();
+                if (activeSeries) {
+                    activeSeries.removePriceLine(this.expirationPriceLine);
+                    this.expirationPriceLine = activeSeries.createPriceLine({
+                        price: this.currentPrice,
+                        color: '#4f9fff',
+                        lineWidth: 2,
+                        lineStyle: LightweightCharts.LineStyle.Solid,
+                        axisLabelVisible: true,
+                        title: '',
+                        axisLabelColor: '#4f9fff',
+                        axisLabelTextColor: '#ffffff'
+                    });
+                }
+            }
         } catch (error) {
-            window.errorLogger?.error('chart', 'Error updating expiration price line position', { error: error.message });
+            window.errorLogger?.error('chart', 'Error updating expiration overlay position', { error: error.message });
         }
     }
     
-    // Обновить текст линии экспирации
-    updateExpirationPriceLine(timeframe, formattedTime) {
-        if (!this.expirationPriceLine || !this.currentPrice) {
-            // Если линия не создана, создаем её
+    // Обновить текст оверлея экспирации
+    updateExpirationOverlay(timeframe, formattedTime, timeLeft) {
+        if (!this.expirationOverlay || !this.currentPrice) {
+            // Если оверлей не создан, создаем его
             if (this.chartType !== 'line' && this.currentPrice) {
-                this.createExpirationPriceLine();
+                this.createExpirationOverlay();
             }
         }
         
-        if (!this.expirationPriceLine) return;
-        
-        const activeSeries = this.getActiveSeries();
-        if (!activeSeries) return;
+        if (!this.expirationOverlay) return;
         
         try {
-            // Пересоздаем линию с новым текстом
-            activeSeries.removePriceLine(this.expirationPriceLine);
+            // Обновляем текст времени экспирации (над линией)
+            const expirationTimeEl = this.expirationOverlay.querySelector('.expiration-time');
+            if (expirationTimeEl) {
+                expirationTimeEl.textContent = `${timeframe} ${formattedTime}`;
+            }
             
-            this.expirationPriceLine = activeSeries.createPriceLine({
-                price: this.currentPrice,
-                color: '#4f9fff',
-                lineWidth: 2,
-                lineStyle: LightweightCharts.LineStyle.Solid,
-                axisLabelVisible: true,
-                title: `${timeframe} ${formattedTime}`,
-                axisLabelColor: '#4f9fff',
-                axisLabelTextColor: '#ffffff'
-            });
+            // Обновляем время до истечения (под линией)
+            const timeToExpirationEl = this.expirationOverlay.querySelector('.time-to-expiration');
+            if (timeToExpirationEl && timeLeft !== undefined) {
+                // Форматируем время до истечения в MM:SS
+                const minutes = Math.floor(timeLeft / 60);
+                const seconds = timeLeft % 60;
+                timeToExpirationEl.textContent = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+            }
+            
+            // Обновляем позицию оверлея
+            this.updateExpirationOverlayPosition();
         } catch (error) {
-            window.errorLogger?.error('chart', 'Error updating expiration price line', { error: error.message });
+            window.errorLogger?.error('chart', 'Error updating expiration overlay', { error: error.message });
         }
     }
     
@@ -1197,8 +1260,8 @@ class ChartManager {
         this.currentInterpolatedCandle = null;
         this.targetCandle = null;
         
-        // Удаляем линию экспирации при смене символа
-        this.removeExpirationPriceLine();
+        // Удаляем оверлей экспирации при смене символа
+        this.removeExpirationOverlay();
 
         // Очищаем график и сбрасываем счетчики
         if (this.candleSeries) {
@@ -1231,11 +1294,11 @@ class ChartManager {
         // Переиспользуем соединение (если есть) или создаем новое
         this.connectWebSocket(newSymbol);
         
-        // Пересоздаем линию экспирации для нового символа (если нужно)
+        // Пересоздаем оверлей экспирации для нового символа (если нужно)
         if (this.chartType !== 'line') {
             setTimeout(() => {
                 if (this.currentPrice) {
-                    this.createExpirationPriceLine();
+                    this.createExpirationOverlay();
                 }
             }, 500);
         }
@@ -1288,11 +1351,11 @@ class ChartManager {
             this.barSeries.applyOptions({ visible: type === 'bars' });
         }
         
-        // Создаем/удаляем линию экспирации в зависимости от типа графика
+        // Создаем/удаляем оверлей экспирации в зависимости от типа графика
         if (type === 'candles' || type === 'bars') {
-            this.createExpirationPriceLine();
+            this.createExpirationOverlay();
         } else {
-            this.removeExpirationPriceLine();
+            this.removeExpirationOverlay();
         }
         
         // Для line графика останавливаем таймер экспирации
@@ -1300,16 +1363,16 @@ class ChartManager {
             if (window.chartTimeframeManager) {
                 window.chartTimeframeManager.stopExpirationTimer();
             }
-            this.removeExpirationPriceLine();
+            this.removeExpirationOverlay();
         } else {
-            // Для candles/bars перезапускаем таймер и создаем линию
+            // Для candles/bars перезапускаем таймер и создаем оверлей
             if (window.chartTimeframeManager) {
                 this.setTimeframe(this.timeframe);
             }
-            // Небольшая задержка для корректного создания линии после переключения
+            // Небольшая задержка для корректного создания оверлея после переключения
             setTimeout(() => {
                 if (this.currentPrice) {
-                    this.createExpirationPriceLine();
+                    this.createExpirationOverlay();
                 }
             }, 100);
         }
@@ -1325,8 +1388,8 @@ class ChartManager {
         // Обновляем таймер экспирации только для candles/bars
         if (this.chartType !== 'line' && window.chartTimeframeManager) {
             window.chartTimeframeManager.setTimeframe(timeframe, (formatted, timeLeft, tf) => {
-                // Обновляем линию экспирации на графике
-                this.updateExpirationPriceLine(tf, formatted);
+                // Обновляем оверлей экспирации на графике
+                this.updateExpirationOverlay(tf, formatted, timeLeft);
             });
         }
         
@@ -1376,8 +1439,8 @@ class ChartManager {
             window.chartTimeframeManager.destroy();
         }
         
-        // Удаляем линию экспирации
-        this.removeExpirationPriceLine();
+        // Удаляем оверлей экспирации
+        this.removeExpirationOverlay();
         
         // Полностью очищаем WebSocket
         this.closeWebSocket();

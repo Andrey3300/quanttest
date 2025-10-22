@@ -143,10 +143,10 @@ function showTradingPage() {
             }
             
             window.chartManager.loadHistoricalData('USD_MXN_OTC').then(() => {
-                // Создаем линию экспирации после загрузки исторических данных
+                // Создаем оверлей экспирации после загрузки исторических данных
                 if (chartType !== 'line' && window.chartManager.currentPrice) {
                     setTimeout(() => {
-                        window.chartManager.createExpirationPriceLine();
+                        window.chartManager.createExpirationOverlay();
                     }, 200);
                 }
             });
