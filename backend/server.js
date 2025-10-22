@@ -533,35 +533,6 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000); // каждые 5 минут
 
-// КРИТИЧЕСКОЕ УЛУЧШЕНИЕ: Автоматическая очистка неактивных генераторов
-// Предотвращает утечки памяти, удаляя генераторы без подписчиков каждые 5 минут
-const chartGeneratorModule = require('./chartGenerator');
-setInterval(() => {
-  const generators = chartGeneratorModule.generators;
-  
-  if (generators && generators.size > 0) {
-    const inactiveSymbols = [];
-    
-    generators.forEach((generator, symbol) => {
-      const hasSubscribers = subscriptions.has(symbol) && subscriptions.get(symbol).size > 0;
-      
-      if (!hasSubscribers) {
-        inactiveSymbols.push(symbol);
-      }
-    });
-    
-    // Удаляем неактивные генераторы
-    inactiveSymbols.forEach(symbol => {
-      generators.delete(symbol);
-      console.log(`✓ Cleaned up inactive generator for ${symbol}`);
-    });
-    
-    if (inactiveSymbols.length > 0) {
-      console.log(`Inactive generators cleaned: ${inactiveSymbols.length}, remaining: ${generators.size}`);
-    }
-  }
-}, 5 * 60 * 1000); // каждые 5 минут
-
 server.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
   console.log(`WebSocket server is running on ws://localhost:${PORT}/ws/chart`);
