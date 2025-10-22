@@ -15,10 +15,16 @@ class ChartGenerator {
         }
         
         this.volatility = volatility; // волатильность
-        this.drift = drift; // тренд
+        this.drift = drift; // базовый тренд
         this.meanReversionSpeed = meanReversionSpeed; // скорость возврата к средней
-        this.maxCandleChange = 0.015; // максимальное изменение за свечу (1.5%) - увеличено для лучшей видимости
+        this.maxCandleChange = 0.015; // максимальное изменение за свечу (1.5%)
         this.candles = [];
+        
+        // 🌊 СИСТЕМА ВОЛНООБРАЗНОГО ДВИЖЕНИЯ
+        this.currentDrift = 0.0; // текущий динамический тренд (изменяется со временем)
+        this.trendChangeCounter = 0; // счетчик для смены тренда
+        this.trendChangePeriod = this.randomInt(30, 80); // меняем тренд каждые 30-80 свечей
+        this.trendStrength = 0.0002; // сила тренда (для создания волн)
     }
 
     // Генерация случайного числа с нормальным распределением (Box-Muller)
@@ -29,14 +35,62 @@ class ChartGenerator {
         return mean + z0 * stdDev;
     }
 
-    // Генерация следующей цены с учетом mean-reversion
-    generateNextPrice(currentPrice) {
-        // Mean reversion: цена стремится вернуться к базовой
-        const meanReversionForce = (this.basePrice - currentPrice) * this.meanReversionSpeed;
+    // Генерация случайного целого числа в диапазоне [min, max]
+    randomInt(min, max) {
+        return Math.floor(Math.random() * (max - min + 1)) + min;
+    }
+
+    // 🌊 Обновление тренда для создания волнообразного движения
+    updateTrend() {
+        this.trendChangeCounter++;
         
-        // Geometric Brownian Motion
+        // Пришло время сменить тренд?
+        if (this.trendChangeCounter >= this.trendChangePeriod) {
+            // Генерируем новый тренд (может быть восходящим, нисходящим или нейтральным)
+            const trendType = Math.random();
+            
+            if (trendType < 0.35) {
+                // Восходящий тренд (35%)
+                this.currentDrift = this.trendStrength * this.randomNormal(1.0, 0.3);
+            } else if (trendType < 0.70) {
+                // Нисходящий тренд (35%)
+                this.currentDrift = -this.trendStrength * this.randomNormal(1.0, 0.3);
+            } else {
+                // Боковое движение (30%)
+                this.currentDrift = this.trendStrength * this.randomNormal(0, 0.5);
+            }
+            
+            // Сбрасываем счетчик и генерируем новый период
+            this.trendChangeCounter = 0;
+            this.trendChangePeriod = this.randomInt(30, 80);
+            
+            logger.debug('trend', 'Trend changed', {
+                symbol: this.symbol,
+                newDrift: this.currentDrift,
+                nextChangePeriod: this.trendChangePeriod
+            });
+        } else {
+            // Плавное изменение текущего тренда (добавляем небольшой шум)
+            this.currentDrift += this.randomNormal(0, this.trendStrength * 0.1);
+            // Ограничиваем тренд чтобы он не улетал слишком далеко
+            this.currentDrift = Math.max(-this.trendStrength * 2, Math.min(this.trendStrength * 2, this.currentDrift));
+        }
+    }
+
+    // Генерация следующей цены с учетом mean-reversion и динамического тренда
+    generateNextPrice(currentPrice) {
+        // 🌊 Обновляем тренд для волнообразного движения
+        this.updateTrend();
+        
+        // Mean reversion: цена стремится вернуться к базовой (ослаблен для более свободного движения)
+        // Используем адаптивную силу: слабее когда цена близко, сильнее когда далеко
+        const deviation = Math.abs(currentPrice - this.basePrice) / this.basePrice;
+        const adaptiveMeanReversion = this.meanReversionSpeed * Math.pow(deviation * 10, 1.5);
+        const meanReversionForce = (this.basePrice - currentPrice) * adaptiveMeanReversion;
+        
+        // Geometric Brownian Motion с динамическим трендом
         const randomShock = this.randomNormal(0, this.volatility);
-        const priceChange = this.drift + meanReversionForce + randomShock;
+        const priceChange = this.currentDrift + meanReversionForce + randomShock;
         
         // Ограничиваем максимальное изменение
         const limitedChange = Math.max(-this.maxCandleChange, Math.min(this.maxCandleChange, priceChange));
@@ -66,8 +120,8 @@ class ChartGenerator {
     generateCandle(timestamp, openPrice) {
         const close = this.generateNextPrice(openPrice);
         
-        // Генерируем high и low с реалистичной волатильностью внутри свечи
-        const intraVolatility = this.volatility * 0.4; // уменьшена волатильность для более коротких хвостов
+        // 📏 УМЕНЬШЕННАЯ волатильность внутри свечи для коротких свечей как на бинарных опционах
+        const intraVolatility = this.volatility * 0.12; // сильно уменьшена с 0.4 до 0.12 для компактных свечей
         
         // High должен быть выше open и close
         const maxPrice = Math.max(openPrice, close);
@@ -283,9 +337,11 @@ class ChartGenerator {
         // Генерируем небольшое изменение цены для плавности
         const microVolatility = this.volatility * 0.3; // меньшая волатильность для плавности
         
-        // Mean reversion для тиков - стремимся к базовой цене
-        const meanReversionForce = (this.basePrice - this.currentCandleState.targetClose) * this.meanReversionSpeed;
-        const priceChange = this.randomNormal(0, microVolatility) + meanReversionForce;
+        // Mean reversion для тиков - используем адаптивную силу
+        const deviation = Math.abs(this.currentCandleState.targetClose - this.basePrice) / this.basePrice;
+        const adaptiveMeanReversion = this.meanReversionSpeed * Math.pow(deviation * 10, 1.5);
+        const meanReversionForce = (this.basePrice - this.currentCandleState.targetClose) * adaptiveMeanReversion;
+        const priceChange = this.randomNormal(0, microVolatility) + meanReversionForce + this.currentDrift * 0.5;
         
         // Новая целевая цена close
         let newTargetClose = this.currentCandleState.targetClose * (1 + priceChange);
@@ -313,9 +369,9 @@ class ChartGenerator {
             this.currentCandleState.high = this.currentCandleState.close;
             this.currentCandleState.targetHigh = this.currentCandleState.close;
         } else {
-            // Иногда создаем фитиль вверх для реалистичности (уменьшена частота и размер)
-            if (Math.random() < 0.04) {
-                const wickHigh = this.currentCandleState.close * (1 + Math.abs(this.randomNormal(0, microVolatility * 0.2)));
+            // 📏 Редкие и короткие фитили для компактного вида как на бинарных опционах
+            if (Math.random() < 0.015) { // уменьшено с 4% до 1.5%
+                const wickHigh = this.currentCandleState.close * (1 + Math.abs(this.randomNormal(0, microVolatility * 0.08))); // уменьшено с 0.2 до 0.08
                 if (wickHigh > this.currentCandleState.high && wickHigh <= this.basePrice * 1.1) {
                     this.currentCandleState.high = parseFloat(wickHigh.toFixed(precision));
                     this.currentCandleState.targetHigh = wickHigh;
@@ -327,9 +383,9 @@ class ChartGenerator {
             this.currentCandleState.low = this.currentCandleState.close;
             this.currentCandleState.targetLow = this.currentCandleState.close;
         } else {
-            // Иногда создаем фитиль вниз для реалистичности (уменьшена частота и размер)
-            if (Math.random() < 0.04) {
-                const wickLow = this.currentCandleState.close * (1 - Math.abs(this.randomNormal(0, microVolatility * 0.2)));
+            // 📏 Редкие и короткие фитили для компактного вида как на бинарных опционах
+            if (Math.random() < 0.015) { // уменьшено с 4% до 1.5%
+                const wickLow = this.currentCandleState.close * (1 - Math.abs(this.randomNormal(0, microVolatility * 0.08))); // уменьшено с 0.2 до 0.08
                 if (wickLow < this.currentCandleState.low && wickLow >= this.basePrice * 0.9) {
                     this.currentCandleState.low = parseFloat(wickLow.toFixed(precision));
                     this.currentCandleState.targetLow = wickLow;
@@ -489,72 +545,72 @@ const generators = new Map();
 
 // Конфигурация всех символов
 const SYMBOL_CONFIG = {
-            // Currencies - умеренная волатильность для естественного вида как USD/MXN
-            'USD_MXN_OTC': { basePrice: 18.9167, volatility: 0.002, drift: 0.0 },
-            'EUR_USD_OTC': { basePrice: 1.0850, volatility: 0.0015, drift: 0.0 },
-            'GBP_USD_OTC': { basePrice: 1.2650, volatility: 0.0018, drift: 0.0 },
-            'USD_CAD': { basePrice: 1.3550, volatility: 0.0016, drift: 0.0 },
-            'AUD_CAD_OTC': { basePrice: 0.8820, volatility: 0.0019, drift: 0.0 },
-            'BHD_CNY_OTC': { basePrice: 18.6500, volatility: 0.0017, drift: 0.0 },
-            'EUR_CHF_OTC': { basePrice: 0.9420, volatility: 0.0014, drift: 0.0 },
-            'EUR_CHF_OTC2': { basePrice: 0.9425, volatility: 0.0014, drift: 0.0 },
-            'KES_USD_OTC': { basePrice: 0.0077, volatility: 0.0020, drift: 0.0 },
-            'TND_USD_OTC': { basePrice: 0.3190, volatility: 0.0018, drift: 0.0 },
-            'UAH_USD_OTC': { basePrice: 68623.2282, volatility: 0.008, drift: 0.0, meanReversionSpeed: 0.01 },
-            'USD_BDT_OTC': { basePrice: 0.0092, volatility: 0.0019, drift: 0.0 },
-            'USD_CNH_OTC': { basePrice: 7.2450, volatility: 0.0016, drift: 0.0 },
-            'USD_IDR_OTC': { basePrice: 15850, volatility: 0.007, drift: 0.0, meanReversionSpeed: 0.01 },
-            'USD_MYR_OTC': { basePrice: 4.4650, volatility: 0.0017, drift: 0.0 },
-            'AUD_NZD_OTC': { basePrice: 1.0920, volatility: 0.0016, drift: 0.0 },
-            'USD_PHP_OTC': { basePrice: 0.0178, volatility: 0.0019, drift: 0.0 },
-            'ZAR_USD_OTC': { basePrice: 0.0548, volatility: 0.0021, drift: 0.0 },
-            'YER_USD_OTC': { basePrice: 0.0040, volatility: 0.0022, drift: 0.0 },
-            'USD_BRL_OTC': { basePrice: 5.6250, volatility: 0.0019, drift: 0.0 },
-            'USD_EGP_OTC': { basePrice: 0.0204, volatility: 0.0023, drift: 0.0 },
-            'OMR_CNY_OTC': { basePrice: 18.3500, volatility: 0.0016, drift: 0.0 },
-            'AUD_JPY_OTC': { basePrice: 96.850, volatility: 0.007, drift: 0.0, meanReversionSpeed: 0.01 },
-            'EUR_GBP_OTC': { basePrice: 0.8580, volatility: 0.0015, drift: 0.0 },
-            'EUR_HUF_OTC': { basePrice: 393.50, volatility: 0.008, drift: 0.0, meanReversionSpeed: 0.01 },
-            'EUR_TRY_OTC': { basePrice: 37.250, volatility: 0.0024, drift: 0.0 },
-            'USD_JPY_OTC': { basePrice: 149.850, volatility: 0.007, drift: 0.0, meanReversionSpeed: 0.01 },
-            'USD_CHF_OTC': { basePrice: 0.8690, volatility: 0.0015, drift: 0.0 },
-            'AUD_CHF': { basePrice: 0.5820, volatility: 0.0016, drift: 0.0 },
-            'CHF_JPY': { basePrice: 172.450, volatility: 0.007, drift: 0.0, meanReversionSpeed: 0.01 },
-            'EUR_AUD': { basePrice: 1.6350, volatility: 0.0017, drift: 0.0 },
-            'EUR_CHF': { basePrice: 0.9435, volatility: 0.0014, drift: 0.0 },
-            'EUR_GBP': { basePrice: 0.8575, volatility: 0.0015, drift: 0.0 },
-            'EUR_JPY': { basePrice: 162.650, volatility: 0.007, drift: 0.0, meanReversionSpeed: 0.01 },
-            'EUR_USD': { basePrice: 1.0855, volatility: 0.0016, drift: 0.0 },
-            'GBP_CAD': { basePrice: 1.7150, volatility: 0.0018, drift: 0.0 },
-            'GBP_CHF': { basePrice: 1.1020, volatility: 0.0017, drift: 0.0 },
-            'GBP_USD': { basePrice: 1.2655, volatility: 0.0017, drift: 0.0 },
+            // 🌊 Currencies - ослабленный mean reversion для волнообразного движения
+            'USD_MXN_OTC': { basePrice: 18.9167, volatility: 0.002, drift: 0.0, meanReversionSpeed: 0.008 },
+            'EUR_USD_OTC': { basePrice: 1.0850, volatility: 0.0015, drift: 0.0, meanReversionSpeed: 0.008 },
+            'GBP_USD_OTC': { basePrice: 1.2650, volatility: 0.0018, drift: 0.0, meanReversionSpeed: 0.008 },
+            'USD_CAD': { basePrice: 1.3550, volatility: 0.0016, drift: 0.0, meanReversionSpeed: 0.008 },
+            'AUD_CAD_OTC': { basePrice: 0.8820, volatility: 0.0019, drift: 0.0, meanReversionSpeed: 0.008 },
+            'BHD_CNY_OTC': { basePrice: 18.6500, volatility: 0.0017, drift: 0.0, meanReversionSpeed: 0.008 },
+            'EUR_CHF_OTC': { basePrice: 0.9420, volatility: 0.0014, drift: 0.0, meanReversionSpeed: 0.008 },
+            'EUR_CHF_OTC2': { basePrice: 0.9425, volatility: 0.0014, drift: 0.0, meanReversionSpeed: 0.008 },
+            'KES_USD_OTC': { basePrice: 0.0077, volatility: 0.0020, drift: 0.0, meanReversionSpeed: 0.008 },
+            'TND_USD_OTC': { basePrice: 0.3190, volatility: 0.0018, drift: 0.0, meanReversionSpeed: 0.008 },
+            'UAH_USD_OTC': { basePrice: 68623.2282, volatility: 0.008, drift: 0.0, meanReversionSpeed: 0.006 },
+            'USD_BDT_OTC': { basePrice: 0.0092, volatility: 0.0019, drift: 0.0, meanReversionSpeed: 0.008 },
+            'USD_CNH_OTC': { basePrice: 7.2450, volatility: 0.0016, drift: 0.0, meanReversionSpeed: 0.008 },
+            'USD_IDR_OTC': { basePrice: 15850, volatility: 0.007, drift: 0.0, meanReversionSpeed: 0.006 },
+            'USD_MYR_OTC': { basePrice: 4.4650, volatility: 0.0017, drift: 0.0, meanReversionSpeed: 0.008 },
+            'AUD_NZD_OTC': { basePrice: 1.0920, volatility: 0.0016, drift: 0.0, meanReversionSpeed: 0.008 },
+            'USD_PHP_OTC': { basePrice: 0.0178, volatility: 0.0019, drift: 0.0, meanReversionSpeed: 0.008 },
+            'ZAR_USD_OTC': { basePrice: 0.0548, volatility: 0.0021, drift: 0.0, meanReversionSpeed: 0.008 },
+            'YER_USD_OTC': { basePrice: 0.0040, volatility: 0.0022, drift: 0.0, meanReversionSpeed: 0.008 },
+            'USD_BRL_OTC': { basePrice: 5.6250, volatility: 0.0019, drift: 0.0, meanReversionSpeed: 0.008 },
+            'USD_EGP_OTC': { basePrice: 0.0204, volatility: 0.0023, drift: 0.0, meanReversionSpeed: 0.008 },
+            'OMR_CNY_OTC': { basePrice: 18.3500, volatility: 0.0016, drift: 0.0, meanReversionSpeed: 0.008 },
+            'AUD_JPY_OTC': { basePrice: 96.850, volatility: 0.007, drift: 0.0, meanReversionSpeed: 0.006 },
+            'EUR_GBP_OTC': { basePrice: 0.8580, volatility: 0.0015, drift: 0.0, meanReversionSpeed: 0.008 },
+            'EUR_HUF_OTC': { basePrice: 393.50, volatility: 0.008, drift: 0.0, meanReversionSpeed: 0.006 },
+            'EUR_TRY_OTC': { basePrice: 37.250, volatility: 0.0024, drift: 0.0, meanReversionSpeed: 0.008 },
+            'USD_JPY_OTC': { basePrice: 149.850, volatility: 0.007, drift: 0.0, meanReversionSpeed: 0.006 },
+            'USD_CHF_OTC': { basePrice: 0.8690, volatility: 0.0015, drift: 0.0, meanReversionSpeed: 0.008 },
+            'AUD_CHF': { basePrice: 0.5820, volatility: 0.0016, drift: 0.0, meanReversionSpeed: 0.008 },
+            'CHF_JPY': { basePrice: 172.450, volatility: 0.007, drift: 0.0, meanReversionSpeed: 0.006 },
+            'EUR_AUD': { basePrice: 1.6350, volatility: 0.0017, drift: 0.0, meanReversionSpeed: 0.008 },
+            'EUR_CHF': { basePrice: 0.9435, volatility: 0.0014, drift: 0.0, meanReversionSpeed: 0.008 },
+            'EUR_GBP': { basePrice: 0.8575, volatility: 0.0015, drift: 0.0, meanReversionSpeed: 0.008 },
+            'EUR_JPY': { basePrice: 162.650, volatility: 0.007, drift: 0.0, meanReversionSpeed: 0.006 },
+            'EUR_USD': { basePrice: 1.0855, volatility: 0.0016, drift: 0.0, meanReversionSpeed: 0.008 },
+            'GBP_CAD': { basePrice: 1.7150, volatility: 0.0018, drift: 0.0, meanReversionSpeed: 0.008 },
+            'GBP_CHF': { basePrice: 1.1020, volatility: 0.0017, drift: 0.0, meanReversionSpeed: 0.008 },
+            'GBP_USD': { basePrice: 1.2655, volatility: 0.0017, drift: 0.0, meanReversionSpeed: 0.008 },
             
-            // Cryptocurrencies - увеличенная волатильность и ослабленный mean reversion для более свободного движения
-            'BTC': { basePrice: 68500, volatility: 0.012, drift: 0.0, meanReversionSpeed: 0.002 },
-            'BTC_OTC': { basePrice: 68750, volatility: 0.012, drift: 0.0, meanReversionSpeed: 0.002 },
-            'BTC_ETF_OTC': { basePrice: 68600, volatility: 0.012, drift: 0.0, meanReversionSpeed: 0.002 },
-            'ETH_OTC': { basePrice: 3450, volatility: 0.014, drift: 0.0, meanReversionSpeed: 0.002 },
-            'TEST_TEST1': { basePrice: 125.50, volatility: 0.0035, drift: 0.0, meanReversionSpeed: 0.003 },
-            'BNB_OTC': { basePrice: 585, volatility: 0.013, drift: 0.0, meanReversionSpeed: 0.002 },
-            'SOL_OTC': { basePrice: 168, volatility: 0.015, drift: 0.0, meanReversionSpeed: 0.002 },
-            'ADA_OTC': { basePrice: 0.58, volatility: 0.0036, drift: 0.0, meanReversionSpeed: 0.003 },
-            'DOGE_OTC': { basePrice: 0.14, volatility: 0.0040, drift: 0.0, meanReversionSpeed: 0.003 },
-            'DOT_OTC': { basePrice: 7.2, volatility: 0.0034, drift: 0.0, meanReversionSpeed: 0.003 },
-            'MATIC_OTC': { basePrice: 0.78, volatility: 0.0037, drift: 0.0, meanReversionSpeed: 0.003 },
-            'LTC_OTC': { basePrice: 85, volatility: 0.013, drift: 0.0, meanReversionSpeed: 0.002 },
-            'LINK_OTC': { basePrice: 15.8, volatility: 0.0034, drift: 0.0, meanReversionSpeed: 0.003 },
-            'AVAX_OTC': { basePrice: 38.5, volatility: 0.0039, drift: 0.0, meanReversionSpeed: 0.003 },
-            'TRX_OTC': { basePrice: 0.168, volatility: 0.0032, drift: 0.0, meanReversionSpeed: 0.003 },
-            'TON_OTC': { basePrice: 5.6, volatility: 0.0036, drift: 0.0, meanReversionSpeed: 0.003 },
+            // Cryptocurrencies - еще слабее mean reversion для более свободного движения с волнами
+            'BTC': { basePrice: 68500, volatility: 0.012, drift: 0.0, meanReversionSpeed: 0.001 },
+            'BTC_OTC': { basePrice: 68750, volatility: 0.012, drift: 0.0, meanReversionSpeed: 0.001 },
+            'BTC_ETF_OTC': { basePrice: 68600, volatility: 0.012, drift: 0.0, meanReversionSpeed: 0.001 },
+            'ETH_OTC': { basePrice: 3450, volatility: 0.014, drift: 0.0, meanReversionSpeed: 0.001 },
+            'TEST_TEST1': { basePrice: 125.50, volatility: 0.0035, drift: 0.0, meanReversionSpeed: 0.002 },
+            'BNB_OTC': { basePrice: 585, volatility: 0.013, drift: 0.0, meanReversionSpeed: 0.001 },
+            'SOL_OTC': { basePrice: 168, volatility: 0.015, drift: 0.0, meanReversionSpeed: 0.001 },
+            'ADA_OTC': { basePrice: 0.58, volatility: 0.0036, drift: 0.0, meanReversionSpeed: 0.002 },
+            'DOGE_OTC': { basePrice: 0.14, volatility: 0.0040, drift: 0.0, meanReversionSpeed: 0.002 },
+            'DOT_OTC': { basePrice: 7.2, volatility: 0.0034, drift: 0.0, meanReversionSpeed: 0.002 },
+            'MATIC_OTC': { basePrice: 0.78, volatility: 0.0037, drift: 0.0, meanReversionSpeed: 0.002 },
+            'LTC_OTC': { basePrice: 85, volatility: 0.013, drift: 0.0, meanReversionSpeed: 0.001 },
+            'LINK_OTC': { basePrice: 15.8, volatility: 0.0034, drift: 0.0, meanReversionSpeed: 0.002 },
+            'AVAX_OTC': { basePrice: 38.5, volatility: 0.0039, drift: 0.0, meanReversionSpeed: 0.002 },
+            'TRX_OTC': { basePrice: 0.168, volatility: 0.0032, drift: 0.0, meanReversionSpeed: 0.002 },
+            'TON_OTC': { basePrice: 5.6, volatility: 0.0036, drift: 0.0, meanReversionSpeed: 0.002 },
             
-            // Commodities - оптимизированная волатильность
-            'GOLD_OTC': { basePrice: 2650, volatility: 0.008, drift: 0.0, meanReversionSpeed: 0.01 },
-            'SILVER_OTC': { basePrice: 31.5, volatility: 0.0022, drift: 0.0 },
-            'BRENT_OTC': { basePrice: 87.5, volatility: 0.010, drift: 0.0, meanReversionSpeed: 0.01 },
-            'WTI_OTC': { basePrice: 83.8, volatility: 0.010, drift: 0.0, meanReversionSpeed: 0.01 },
-            'NATGAS_OTC': { basePrice: 3.2, volatility: 0.0028, drift: 0.0 },
-            'PALLADIUM_OTC': { basePrice: 1050, volatility: 0.009, drift: 0.0, meanReversionSpeed: 0.01 },
-            'PLATINUM_OTC': { basePrice: 980, volatility: 0.009, drift: 0.0, meanReversionSpeed: 0.01 }
+            // Commodities - ослабленный mean reversion для волнообразного движения
+            'GOLD_OTC': { basePrice: 2650, volatility: 0.008, drift: 0.0, meanReversionSpeed: 0.006 },
+            'SILVER_OTC': { basePrice: 31.5, volatility: 0.0022, drift: 0.0, meanReversionSpeed: 0.008 },
+            'BRENT_OTC': { basePrice: 87.5, volatility: 0.010, drift: 0.0, meanReversionSpeed: 0.006 },
+            'WTI_OTC': { basePrice: 83.8, volatility: 0.010, drift: 0.0, meanReversionSpeed: 0.006 },
+            'NATGAS_OTC': { basePrice: 3.2, volatility: 0.0028, drift: 0.0, meanReversionSpeed: 0.008 },
+            'PALLADIUM_OTC': { basePrice: 1050, volatility: 0.009, drift: 0.0, meanReversionSpeed: 0.006 },
+            'PLATINUM_OTC': { basePrice: 980, volatility: 0.009, drift: 0.0, meanReversionSpeed: 0.006 }
 };
 
 function getGenerator(symbol) {
