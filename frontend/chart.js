@@ -320,14 +320,39 @@ class ChartManager {
         }
     }
 
-    // Подключение к WebSocket
+    // Подключение к WebSocket (переиспользуем соединение)
     connectWebSocket(symbol) {
         const wsUrl = window.location.origin.includes('localhost')
             ? 'ws://localhost:3001/ws/chart'
             : `ws://${window.location.host}/ws/chart`;
 
         try {
-            // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Полная очистка старого соединения
+            // ПРОБЛЕМА WebSocket РЕШЕНА: Переиспользуем одно соединение
+            // Если соединение уже есть и оно активно, просто меняем подписку
+            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                window.errorLogger?.info('websocket', 'Reusing existing connection for symbol change', { 
+                    oldSymbol: this.symbol,
+                    newSymbol: symbol
+                });
+                
+                // Явный unsubscribe от старого символа
+                if (this.symbol && this.symbol !== symbol) {
+                    this.ws.send(JSON.stringify({
+                        type: 'unsubscribe',
+                        symbol: this.symbol
+                    }));
+                }
+                
+                // Подписываемся на новый символ
+                this.symbol = symbol;
+                this.ws.send(JSON.stringify({
+                    type: 'subscribe',
+                    symbol: symbol
+                }));
+                return;
+            }
+            
+            // Иначе создаем новое соединение
             this.closeWebSocket();
             
             // Отменяем любые pending переподключения
@@ -377,6 +402,11 @@ class ChartManager {
                         window.errorLogger?.info('websocket', 'Subscription confirmed', { 
                             symbol: message.symbol,
                             connectionId: currentConnectionId
+                        });
+                    } else if (message.type === 'unsubscribed') {
+                        console.log(`Unsubscribed from ${message.symbol}`);
+                        window.errorLogger?.info('websocket', 'Unsubscription confirmed', { 
+                            symbol: message.symbol
                         });
                     } else if (message.type === 'tick') {
                         // Плавное обновление текущей свечи (не проверяем дубликаты для тиков)
@@ -806,23 +836,12 @@ class ChartManager {
         }
     }
 
-    // Смена символа
+    // Смена символа (используем переиспользование соединения)
     async changeSymbol(newSymbol) {
         window.errorLogger?.info('chart', 'Changing symbol', { 
             from: this.symbol, 
             to: newSymbol 
         });
-        
-        this.symbol = newSymbol;
-        
-        // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Полностью очищаем WebSocket соединение
-        this.closeWebSocket();
-        
-        // Отменяем любые pending переподключения от предыдущего символа
-        if (this.reconnectTimer) {
-            clearTimeout(this.reconnectTimer);
-            this.reconnectTimer = null;
-        }
 
         // Очищаем график и сбрасываем счетчики
         if (this.candleSeries) {
@@ -839,14 +858,13 @@ class ChartManager {
         // Очищаем сет обработанных свечей
         this.processedCandles.clear();
 
-        // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Сначала загружаем данные, ПОТОМ подключаем WebSocket
-        // Это гарантирует что candleCount установлен корректно ДО первых тиков
+        // Загружаем данные
         await this.loadHistoricalData(newSymbol);
         
         // Небольшая задержка для гарантии что backend тоже инициализировал генератор
         await new Promise(resolve => setTimeout(resolve, 100));
 
-        // Только теперь подключаемся к WebSocket
+        // Переиспользуем соединение (если есть) или создаем новое
         this.connectWebSocket(newSymbol);
         
         window.errorLogger?.info('chart', 'Chart switched successfully', { 
