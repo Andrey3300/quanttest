@@ -11,7 +11,7 @@ class ChartManager {
         this.isInitialized = false;
         this.isUserInteracting = false; // флаг взаимодействия пользователя
         this.lastUpdateTime = 0; // время последнего обновления
-        this.updateThrottle = 150; // минимальный интервал между обновлениями (ms) - увеличено в 3 раза
+        this.updateThrottle = 60; // минимальный интервал между обновлениями (ms) - оптимизировано для плавности
         this.lastCandle = null; // последняя свеча для отслеживания
         this.candleCount = 0; // количество свечей для корректного расчета индексов
         this.isDestroyed = false; // флаг уничтожения для предотвращения переподключения
@@ -39,8 +39,8 @@ class ChartManager {
             target: null,    // целевые значения {close, high, low}
             candleData: null // полные данные свечи {time, open, close, high, low, volume}
         };
-        this.lerpFactor = 0.25; // коэффициент интерполяции (0.2-0.3 для плавности)
-        this.animationThreshold = 0.0001; // минимальная разница для остановки анимации
+        this.lerpFactor = 0.10; // коэффициент интерполяции (снижен в 2.5 раза для большей плавности)
+        this.animationThreshold = 0.00005; // минимальная разница для остановки анимации (уменьшен порог)
     }
 
     // Инициализация графика
@@ -87,7 +87,7 @@ class ChartManager {
                 secondsVisible: true,
                 barSpacing: 12, // Увеличено пространство между свечами (с 8 до 12)
                 minBarSpacing: 6, // Увеличена минимальная толщина (с 4 до 6)
-                rightOffset: 25, // Увеличен отступ справа (с 12 до 25)
+                rightOffset: 45, // Отступ справа для комфортного просмотра последней свечи
                 lockVisibleTimeRangeOnResize: true,
             },
         });
@@ -190,7 +190,7 @@ class ChartManager {
             
             // Проверяем на схлопывание
             const visibleBars = range.to - range.from;
-            const rightOffsetBars = 25; // синхронизировано с rightOffset в настройках
+            const rightOffsetBars = 45; // синхронизировано с rightOffset в настройках
             const pureVisibleBars = visibleBars - rightOffsetBars;
             
             if (pureVisibleBars < this.MIN_VISIBLE_BARS) {
@@ -312,7 +312,7 @@ class ChartManager {
             // Устанавливаем начальный видимый диапазон (последние ~70 свечей для большего пространства)
             if (data.length > 0) {
                 // Используем фиксированный отступ справа (rightOffset из настроек)
-                const rightOffsetBars = 25; // синхронизировано с rightOffset в настройках
+                const rightOffsetBars = 45; // синхронизировано с rightOffset в настройках
                 const visibleLogicalRange = {
                     from: Math.max(0, data.length - 70), // уменьшено с 100 до 70
                     to: data.length - 1 + rightOffsetBars
@@ -706,12 +706,12 @@ class ChartManager {
                 clearTimeout(this.scrollDebounceTimer);
                 
                 this.scrollDebounceTimer = setTimeout(() => {
-                    try {
-                        const timeScale = this.chart.timeScale();
-                        const currentRange = timeScale.getVisibleLogicalRange();
-                        
-                        if (currentRange) {
-                            const rightOffsetBars = 25; // синхронизировано с rightOffset в настройках
+                        try {
+                            const timeScale = this.chart.timeScale();
+                            const currentRange = timeScale.getVisibleLogicalRange();
+                            
+                            if (currentRange) {
+                                const rightOffsetBars = 45; // синхронизировано с rightOffset в настройках
                             
                             // РЕШЕНИЕ #4: Используем candleCount напрямую, не создаем промежуточных переменных
                             // которые могут внести путаницу
