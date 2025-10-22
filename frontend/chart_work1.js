@@ -11,7 +11,7 @@ class ChartManager {
         this.isInitialized = false;
         this.isUserInteracting = false; // флаг взаимодействия пользователя
         this.lastUpdateTime = 0; // время последнего обновления
-        this.updateThrottle = 16; // минимальный интервал между обновлениями (ms) - 60fps для интерполяции
+        this.updateThrottle = 150; // минимальный интервал между обновлениями (ms) - увеличено в 3 раза
         this.lastCandle = null; // последняя свеча для отслеживания
         this.candleCount = 0; // количество свечей для корректного расчета индексов
         this.isDestroyed = false; // флаг уничтожения для предотвращения переподключения
@@ -30,15 +30,6 @@ class ChartManager {
         // Защита от схлопывания
         this.MIN_VISIBLE_BARS = 10; // минимальная ширина видимого диапазона
         this.isRestoringRange = false; // флаг восстановления диапазона
-        
-        // 🎯 ИНТЕРПОЛЯЦИЯ ДЛЯ ПЛАВНОСТИ 60FPS (Binance-level smoothness!)
-        this.interpolationEnabled = true; // включить/выключить интерполяцию
-        this.targetCandle = null; // целевое состояние свечи (куда движемся)
-        this.currentInterpolatedCandle = null; // текущее интерполированное состояние
-        this.interpolationStartTime = null; // время начала интерполяции
-        this.interpolationDuration = 50; // длительность интерполяции (ms) - соответствует частоте тиков
-        this.animationFrameId = null; // ID для requestAnimationFrame
-        this.lastTickTime = 0; // время последнего тика для расчета интерполяции
     }
 
     // Инициализация графика
@@ -578,23 +569,17 @@ class ChartManager {
             return;
         }
         
-        // Троттлинг обновлений - для интерполяции используем 16ms (60fps)
+        // Троттлинг обновлений - не чаще чем каждые 50ms (только для тиков)
         const now = Date.now();
-        
+        if (!isNewCandle && (now - this.lastUpdateTime) < this.updateThrottle) {
+            return;
+        }
+        this.lastUpdateTime = now;
+
         // РЕШЕНИЕ #3: Отслеживаем успешность добавления свечи
         let actuallyAddedNewCandle = false;
         
-        // 🎯 ИНТЕРПОЛЯЦИЯ: Для тиков используем плавную анимацию
-        if (!isNewCandle && this.interpolationEnabled && this.lastCandle) {
-            // Это тик - запускаем интерполяцию от текущей свечи к новому состоянию
-            const fromCandle = this.currentInterpolatedCandle || this.lastCandle;
-            this.startInterpolation(fromCandle, candle);
-            this.lastCandle = candle;
-            this.lastTickTime = now;
-            return; // Интерполяция сама обновит график через requestAnimationFrame
-        }
-        
-        // Обновляем свечу без интерполяции (для новых свечей или если интерполяция выключена)
+        // Обновляем свечу без перерисовки всего графика
         try {
             this.candleSeries.update(candle);
             
@@ -652,13 +637,6 @@ class ChartManager {
                         }
                     }
                 }
-                
-                // Для новой свечи останавливаем интерполяцию и сбрасываем состояние
-                if (this.animationFrameId) {
-                    cancelAnimationFrame(this.animationFrameId);
-                    this.animationFrameId = null;
-                }
-                this.currentInterpolatedCandle = candle;
             }
             
             this.volumeSeries.update({
@@ -676,10 +654,8 @@ class ChartManager {
             return;
         }
         
-        // Обновляем цену в UI (для новых свечей, тики обновляются в интерполяции)
-        if (isNewCandle) {
-            this.updatePriceDisplay(candle.close);
-        }
+        // Обновляем цену в UI
+        this.updatePriceDisplay(candle.close);
         
         // РЕШЕНИЕ #3: Обновляем счетчик ТОЛЬКО если свеча реально добавлена
         if (actuallyAddedNewCandle) {
@@ -860,103 +836,12 @@ class ChartManager {
         }
     }
 
-    // 🎨 ИНТЕРПОЛЯЦИЯ - плавная анимация между тиками (60fps визуально)
-    // Это создает "Binance-level" плавность даже при 20 тиках/сек
-    startInterpolation(fromCandle, toCandle) {
-        if (!this.interpolationEnabled || !fromCandle || !toCandle) {
-            return;
-        }
-        
-        // Останавливаем предыдущую анимацию если есть
-        if (this.animationFrameId) {
-            cancelAnimationFrame(this.animationFrameId);
-            this.animationFrameId = null;
-        }
-        
-        // Инициализируем начальное состояние
-        this.currentInterpolatedCandle = { ...fromCandle };
-        this.targetCandle = { ...toCandle };
-        this.interpolationStartTime = performance.now();
-        
-        // Запускаем анимацию
-        this.animate();
-    }
-    
-    // Анимационный цикл (60fps через requestAnimationFrame)
-    animate() {
-        if (!this.interpolationEnabled || !this.targetCandle || !this.currentInterpolatedCandle) {
-            return;
-        }
-        
-        const now = performance.now();
-        const elapsed = now - this.interpolationStartTime;
-        
-        // Рассчитываем прогресс (0.0 - 1.0)
-        const progress = Math.min(elapsed / this.interpolationDuration, 1.0);
-        
-        // Easing function для плавности (easeOutQuad - быстрый старт, плавное завершение)
-        const eased = 1 - Math.pow(1 - progress, 2);
-        
-        // Интерполируем OHLC значения
-        const interpolated = {
-            time: this.targetCandle.time,
-            open: this.currentInterpolatedCandle.open, // open не меняется
-            high: this.lerp(this.currentInterpolatedCandle.high, this.targetCandle.high, eased),
-            low: this.lerp(this.currentInterpolatedCandle.low, this.targetCandle.low, eased),
-            close: this.lerp(this.currentInterpolatedCandle.close, this.targetCandle.close, eased),
-            volume: this.targetCandle.volume // volume обновляется сразу
-        };
-        
-        // Обновляем график
-        try {
-            this.candleSeries.update(interpolated);
-            this.volumeSeries.update({
-                time: interpolated.time,
-                value: interpolated.volume,
-                color: interpolated.close >= interpolated.open ? '#26d07c80' : '#ff475780'
-            });
-            
-            // Обновляем отображение цены
-            this.updatePriceDisplay(interpolated.close);
-        } catch (error) {
-            window.errorLogger?.error('interpolation', 'Error during animation', {
-                error: error.message,
-                interpolated: interpolated
-            });
-            console.error('Animation error:', error);
-            return;
-        }
-        
-        // Продолжаем анимацию если не завершена
-        if (progress < 1.0) {
-            this.currentInterpolatedCandle = interpolated;
-            this.animationFrameId = requestAnimationFrame(() => this.animate());
-        } else {
-            // Анимация завершена - устанавливаем финальное состояние
-            this.currentInterpolatedCandle = this.targetCandle;
-            this.animationFrameId = null;
-        }
-    }
-    
-    // Линейная интерполяция между двумя значениями
-    lerp(start, end, t) {
-        return start + (end - start) * t;
-    }
-
     // Смена символа (используем переиспользование соединения)
     async changeSymbol(newSymbol) {
         window.errorLogger?.info('chart', 'Changing symbol', { 
             from: this.symbol, 
             to: newSymbol 
         });
-
-        // 🎯 Останавливаем интерполяцию при смене символа
-        if (this.animationFrameId) {
-            cancelAnimationFrame(this.animationFrameId);
-            this.animationFrameId = null;
-        }
-        this.currentInterpolatedCandle = null;
-        this.targetCandle = null;
 
         // Очищаем график и сбрасываем счетчики
         if (this.candleSeries) {
@@ -1029,12 +914,6 @@ class ChartManager {
         if (this.scrollDebounceTimer) {
             clearTimeout(this.scrollDebounceTimer);
             this.scrollDebounceTimer = null;
-        }
-        
-        // 🎯 Останавливаем интерполяционную анимацию
-        if (this.animationFrameId) {
-            cancelAnimationFrame(this.animationFrameId);
-            this.animationFrameId = null;
         }
         
         // Полностью очищаем WebSocket
