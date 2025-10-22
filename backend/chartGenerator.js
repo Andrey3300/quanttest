@@ -67,7 +67,7 @@ class ChartGenerator {
         const close = this.generateNextPrice(openPrice);
         
         // Генерируем high и low с реалистичной волатильностью внутри свечи
-        const intraVolatility = this.volatility * 1.5; // внутри-свечная волатильность выше
+        const intraVolatility = this.volatility * 0.4; // уменьшена волатильность для более коротких хвостов
         
         // High должен быть выше open и close
         const maxPrice = Math.max(openPrice, close);
@@ -301,9 +301,9 @@ class ChartGenerator {
             this.currentCandleState.high = this.currentCandleState.close;
             this.currentCandleState.targetHigh = this.currentCandleState.close;
         } else {
-            // Иногда создаем фитиль вверх для реалистичности
-            if (Math.random() < 0.08) {
-                const wickHigh = this.currentCandleState.close * (1 + Math.abs(this.randomNormal(0, microVolatility * 0.5)));
+            // Иногда создаем фитиль вверх для реалистичности (уменьшена частота и размер)
+            if (Math.random() < 0.04) {
+                const wickHigh = this.currentCandleState.close * (1 + Math.abs(this.randomNormal(0, microVolatility * 0.2)));
                 if (wickHigh > this.currentCandleState.high && wickHigh <= this.basePrice * 1.1) {
                     this.currentCandleState.high = parseFloat(wickHigh.toFixed(precision));
                     this.currentCandleState.targetHigh = wickHigh;
@@ -315,9 +315,9 @@ class ChartGenerator {
             this.currentCandleState.low = this.currentCandleState.close;
             this.currentCandleState.targetLow = this.currentCandleState.close;
         } else {
-            // Иногда создаем фитиль вниз для реалистичности
-            if (Math.random() < 0.08) {
-                const wickLow = this.currentCandleState.close * (1 - Math.abs(this.randomNormal(0, microVolatility * 0.5)));
+            // Иногда создаем фитиль вниз для реалистичности (уменьшена частота и размер)
+            if (Math.random() < 0.04) {
+                const wickLow = this.currentCandleState.close * (1 - Math.abs(this.randomNormal(0, microVolatility * 0.2)));
                 if (wickLow < this.currentCandleState.low && wickLow >= this.basePrice * 0.9) {
                     this.currentCandleState.low = parseFloat(wickLow.toFixed(precision));
                     this.currentCandleState.targetLow = wickLow;
