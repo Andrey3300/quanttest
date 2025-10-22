@@ -1006,16 +1006,10 @@ class ChartManager {
             lineWidth: 2,
             lineStyle: LightweightCharts.LineStyle.Solid,
             axisLabelVisible: true,
-            title: '', // Убираем title, так как теперь показываем время в отдельном элементе
+            title: `${this.timeframe} 00:00`,
             axisLabelColor: '#4f9fff',
             axisLabelTextColor: '#ffffff'
         });
-        
-        // Показываем таймер на графике
-        const timerEl = document.getElementById('chart-expiration-timer');
-        if (timerEl && this.chartType !== 'line') {
-            timerEl.style.display = 'flex';
-        }
         
         window.errorLogger?.info('chart', 'Expiration price line created');
     }
@@ -1087,35 +1081,18 @@ class ChartManager {
                 lineWidth: 2,
                 lineStyle: LightweightCharts.LineStyle.Solid,
                 axisLabelVisible: true,
-                title: '', // Убираем title с графика
+                title: `${timeframe} ${formattedTime}`,
                 axisLabelColor: '#4f9fff',
                 axisLabelTextColor: '#ffffff'
             });
-            
-            // Обновляем таймер на графике
-            this.updateChartTimer(timeframe, formattedTime);
         } catch (error) {
             window.errorLogger?.error('chart', 'Error updating expiration price line', { error: error.message });
         }
     }
     
-    // Обновить таймер экспирации на графике
+    // Обновить таймер экспирации на графике (больше не используется)
     updateChartTimer(timeframe, formattedTime) {
-        const timerEl = document.getElementById('chart-expiration-timer');
-        const timerValueEl = document.getElementById('chart-timer-value');
-        const timerTimeframeEl = document.getElementById('chart-timer-timeframe');
-        
-        if (timerEl && timerValueEl && timerTimeframeEl) {
-            timerValueEl.textContent = formattedTime;
-            timerTimeframeEl.textContent = timeframe;
-            
-            // Показываем таймер только для candles и bars
-            if (this.chartType !== 'line') {
-                timerEl.style.display = 'flex';
-            } else {
-                timerEl.style.display = 'none';
-            }
-        }
+        // Removed - timer is now displayed on the price line itself
     }
 
     // 🎨 ИНТЕРПОЛЯЦИЯ - плавная анимация между тиками (60fps визуально)
@@ -1309,12 +1286,6 @@ class ChartManager {
         }
         if (this.barSeries) {
             this.barSeries.applyOptions({ visible: type === 'bars' });
-        }
-        
-        // Скрываем/показываем таймер на графике
-        const timerEl = document.getElementById('chart-expiration-timer');
-        if (timerEl) {
-            timerEl.style.display = (type === 'candles' || type === 'bars') ? 'flex' : 'none';
         }
         
         // Создаем/удаляем линию экспирации в зависимости от типа графика
