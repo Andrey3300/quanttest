@@ -8,6 +8,7 @@ const path = require('path');
 const WebSocket = require('ws');
 const http = require('http');
 const { getGenerator } = require('./chartGenerator');
+const logger = require('./errorLogger');
 require('dotenv').config();
 
 const app = express();
@@ -66,8 +67,9 @@ const authenticateToken = (req, res, next) => {
     return res.status(401).json({ error: 'Access denied' });
   }
 
-  jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+  jwt.verify(token, process.env.JWT_SECRET || 'secret', (err, user) => {
     if (err) {
+      console.error('Token verification error:', err);
       return res.status(403).json({ error: 'Invalid token' });
     }
     req.user = user;
@@ -101,7 +103,9 @@ app.post('/api/register', async (req, res) => {
         user: {
           id: existingUser.id,
           email: existingUser.email,
-          balance: existingUser.balance
+          demoBalance: existingUser.demoBalance || 10000,
+          realBalance: existingUser.realBalance || 0,
+          activeAccount: existingUser.activeAccount || 'demo'
         }
       });
     }
@@ -114,7 +118,9 @@ app.post('/api/register', async (req, res) => {
       id: users.length > 0 ? Math.max(...users.map(u => u.id)) + 1 : 1,
       email,
       password: hashedPassword,
-      balance: 21455.50, // Начальный баланс
+      demoBalance: 10000, // Демо баланс
+      realBalance: 0, // Реальный баланс
+      activeAccount: 'demo', // Активный аккаунт по умолчанию
       createdAt: new Date().toISOString()
     };
 
@@ -129,7 +135,9 @@ app.post('/api/register', async (req, res) => {
       user: {
         id: user.id,
         email: user.email,
-        balance: user.balance
+        demoBalance: user.demoBalance,
+        realBalance: user.realBalance,
+        activeAccount: user.activeAccount
       }
     });
   } catch (error) {
@@ -167,7 +175,9 @@ app.post('/api/login', async (req, res) => {
       user: {
         id: user.id,
         email: user.email,
-        balance: user.balance
+        demoBalance: user.demoBalance || 10000,
+        realBalance: user.realBalance || 0,
+        activeAccount: user.activeAccount || 'demo'
       }
     });
   } catch (error) {
@@ -225,7 +235,34 @@ app.get('/api/user', authenticateToken, (req, res) => {
   res.json({
     id: user.id,
     email: user.email,
-    balance: user.balance
+    demoBalance: user.demoBalance || 10000,
+    realBalance: user.realBalance || 0,
+    activeAccount: user.activeAccount || 'demo'
+  });
+});
+
+// Переключение аккаунта
+app.post('/api/switch-account', authenticateToken, (req, res) => {
+  const { accountType } = req.body;
+  
+  if (accountType !== 'demo' && accountType !== 'real') {
+    return res.status(400).json({ error: 'Invalid account type' });
+  }
+  
+  const user = users.find(u => u.id === req.user.id);
+  if (!user) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+  
+  user.activeAccount = accountType;
+  saveUsers(users);
+  
+  res.json({
+    id: user.id,
+    email: user.email,
+    demoBalance: user.demoBalance || 10000,
+    realBalance: user.realBalance || 0,
+    activeAccount: user.activeAccount
   });
 });
 
@@ -292,7 +329,10 @@ wss.on('connection', (ws, req) => {
           symbol
         }));
       } else if (data.type === 'unsubscribe') {
+
         // УЛУЧШЕНИЕ: Явная обработка unsubscribe
+
+
         const symbol = data.symbol;
         
         if (symbol && subscriptions.has(symbol)) {
@@ -328,17 +368,42 @@ wss.on('connection', (ws, req) => {
   });
 });
 
-// Генерация и рассылка новых свечей каждые 5 секунд
+// Флаг для блокировки тиков во время создания новой свечи
+let isCreatingNewCandle = false;
+
+// Плавные обновления текущей свечи (тики) каждые 200ms для максимальной плавности (5 тиков в секунду)
 setInterval(() => {
+  // Не отправляем тики, если создается новая свеча
+  if (isCreatingNewCandle) {
+    return;
+  }
+  
   subscriptions.forEach((clients, symbol) => {
     if (clients.size > 0) {
       const generator = getGenerator(symbol);
-      const newCandle = generator.generateNextCandle();
+      
+      // ЗАЩИТА: Проверяем что генератор инициализирован с данными
+      if (!generator.candles || generator.candles.length === 0) {
+        logger.warn('websocket', 'Generator not initialized, skipping tick', { symbol });
+        return;
+      }
+      
+      const updatedCandle = generator.generateCandleTick();
+      
+      // Дополнительная проверка: убедимся что время - это число
+      if (typeof updatedCandle.time !== 'number' || isNaN(updatedCandle.time)) {
+        logger.error('websocket', 'Invalid tick time format', { 
+          symbol: symbol,
+          candle: updatedCandle
+        });
+        console.error('Invalid tick time format:', updatedCandle.time);
+        return;
+      }
       
       const message = JSON.stringify({
-        type: 'candle',
+        type: 'tick',
         symbol,
-        data: newCandle
+        data: updatedCandle
       });
       
       // Отправляем всем подписанным клиентам
@@ -349,7 +414,124 @@ setInterval(() => {
       });
     }
   });
-}, 5000); // каждые 5 секунд
+}, 200); // каждые 200ms (5 тиков в секунду) для максимально плавной анимации
+
+// Создание новой свечи каждые 5 секунд
+setInterval(() => {
+  // Блокируем отправку тиков
+  isCreatingNewCandle = true;
+  
+  // РЕШЕНИЕ #5: Логируем начало создания новых свечей
+  const startTime = Date.now();
+  logger.debug('websocket', 'Creating new candles for all symbols', {
+    symbolCount: subscriptions.size,
+    timestamp: startTime
+  });
+  
+  subscriptions.forEach((clients, symbol) => {
+    if (clients.size > 0) {
+      const generator = getGenerator(symbol);
+      
+      // ЗАЩИТА: Проверяем что генератор инициализирован с данными
+      if (!generator.candles || generator.candles.length === 0) {
+        logger.warn('websocket', 'Generator not initialized, skipping new candle', { symbol });
+        return;
+      }
+      
+      const newCandle = generator.generateNextCandle();
+      
+      // Проверка: убедимся что время - это число
+      if (typeof newCandle.time !== 'number' || isNaN(newCandle.time)) {
+        logger.error('websocket', 'Invalid new candle time format', { 
+          symbol: symbol,
+          candle: newCandle
+        });
+        console.error('Invalid new candle time format:', newCandle.time);
+        return;
+      }
+      
+      // РЕШЕНИЕ #5: Валидация OHLC перед отправкой
+      const isValidOHLC = newCandle.high >= newCandle.low &&
+                          newCandle.high >= newCandle.open &&
+                          newCandle.high >= newCandle.close &&
+                          newCandle.low <= newCandle.open &&
+                          newCandle.low <= newCandle.close;
+      
+      if (!isValidOHLC) {
+        logger.error('websocket', 'Invalid OHLC data in new candle', {
+          symbol: symbol,
+          candle: newCandle
+        });
+        console.error('Invalid OHLC data:', newCandle);
+        return;
+      }
+      
+      const message = JSON.stringify({
+        type: 'newCandle',
+        symbol,
+        data: newCandle
+      });
+      
+      // Отправляем всем подписанным клиентам
+      let sentCount = 0;
+      clients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(message);
+          sentCount++;
+        }
+      });
+      
+      logger.logCandle('New candle sent to clients', symbol, newCandle);
+      logger.debug('websocket', 'New candle broadcast complete', {
+        symbol: symbol,
+        time: newCandle.time,
+        clientCount: sentCount
+      });
+      console.log(`New candle created for ${symbol} at time ${newCandle.time}`);
+    }
+  });
+  
+  // РЕШЕНИЕ #4: Увеличиваем задержку с 200ms до 1000ms для стабильной обработки
+  // Это гарантирует что клиенты получат и обработают новую свечу до следующих тиков
+  setTimeout(() => {
+    isCreatingNewCandle = false;
+    logger.debug('websocket', 'Tick generation unlocked after new candles', {
+      elapsedTime: Date.now() - startTime
+    });
+  }, 1000);
+}, 5000); // каждые 5 секунд фиксируем свечу и создаем новую
+
+// Очистка неактивных генераторов каждые 5 минут
+const chartGeneratorModule = require('./chartGenerator');
+setInterval(() => {
+  const generators = chartGeneratorModule.generators;
+  
+  if (generators && generators.size > 0) {
+    const inactiveSymbols = [];
+    
+    generators.forEach((generator, symbol) => {
+      const hasSubscribers = subscriptions.has(symbol) && subscriptions.get(symbol).size > 0;
+      
+      if (!hasSubscribers) {
+        inactiveSymbols.push(symbol);
+      }
+    });
+    
+    // Удаляем неактивные генераторы
+    inactiveSymbols.forEach(symbol => {
+      generators.delete(symbol);
+      console.log(`Cleaned up inactive generator for ${symbol}`);
+    });
+    
+    if (inactiveSymbols.length > 0) {
+      logger.info('cleanup', 'Inactive generators cleaned', {
+        cleaned: inactiveSymbols.length,
+        remaining: generators.size,
+        symbols: inactiveSymbols
+      });
+    }
+  }
+}, 5 * 60 * 1000); // каждые 5 минут
 
 // КРИТИЧЕСКОЕ УЛУЧШЕНИЕ: Автоматическая очистка неактивных генераторов
 // Предотвращает утечки памяти, удаляя генераторы без подписчиков каждые 5 минут
