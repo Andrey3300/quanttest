@@ -1068,18 +1068,39 @@ class ChartManager {
         }
     }
     
-    // Обновить текст оверлея экспирации (удалена - больше не используется)
+    // Обновить оверлей экспирации с временем и таймфреймом
     updateExpirationOverlay(timeframe, formattedTime, timeLeft) {
-        // Removed - no longer displaying time overlay
-        // Only update the price line if needed
-        if (this.chartType !== 'line' && this.currentPrice && !this.expirationPriceLine) {
-            this.createExpirationOverlay();
+        // Создаем/обновляем только линию цены
+        if (this.chartType !== 'line' && this.currentPrice) {
+            if (!this.expirationPriceLine) {
+                this.createExpirationOverlay();
+            }
+            
+            // Обновляем HTML элемент с временем экспирации
+            this.updateChartTimer(timeframe, formattedTime);
         }
     }
     
-    // Обновить таймер экспирации на графике (удалено - больше не используется)
+    // Обновить таймер экспирации на графике
     updateChartTimer(timeframe, formattedTime) {
-        // Removed - time overlay is no longer displayed
+        // Находим или создаем элемент для отображения времени
+        let timerElement = document.getElementById('chart-expiration-timer');
+        
+        if (!timerElement) {
+            // Создаем элемент если его нет
+            timerElement = document.createElement('div');
+            timerElement.id = 'chart-expiration-timer';
+            timerElement.className = 'chart-expiration-timer';
+            
+            const chartContainer = document.getElementById('chart');
+            if (chartContainer) {
+                chartContainer.appendChild(timerElement);
+            }
+        }
+        
+        // Обновляем текст
+        const timeframeLabel = window.chartTimeframeManager?.getTimeframeLabel(timeframe) || timeframe;
+        timerElement.innerHTML = `<span class="timeframe-label">${timeframeLabel}</span> <span class="timer-value">${formattedTime}</span>`;
     }
 
     // 🎨 ИНТЕРПОЛЯЦИЯ - плавная анимация между тиками (60fps визуально)
@@ -1142,8 +1163,13 @@ class ChartManager {
                 color: interpolated.close >= interpolated.open ? '#26d07c80' : '#ff475780'
             });
             
-            // Обновляем отображение цены
+            // Обновляем отображение цены И линию цены
             this.updatePriceDisplay(interpolated.close);
+            
+            // ИСПРАВЛЕНИЕ: Обновляем линию цены во время интерполяции
+            if (this.expirationPriceLine && this.chartType !== 'line') {
+                this.updateExpirationPriceLine();
+            }
         } catch (error) {
             window.errorLogger?.error('interpolation', 'Error during animation', {
                 error: error.message,
@@ -1184,8 +1210,14 @@ class ChartManager {
         this.currentInterpolatedCandle = null;
         this.targetCandle = null;
         
-        // Удаляем линию цены при смене символа
+        // Удаляем линию цены и таймер при смене символа
         this.removeExpirationOverlay();
+        
+        // Удаляем таймер экспирации
+        const timerElement = document.getElementById('chart-expiration-timer');
+        if (timerElement) {
+            timerElement.remove();
+        }
 
         // Очищаем график и сбрасываем счетчики
         if (this.candleSeries) {
@@ -1288,7 +1320,9 @@ class ChartManager {
         } else {
             // Для candles/bars перезапускаем таймер
             if (window.chartTimeframeManager) {
-                this.setTimeframe(this.timeframe);
+                window.chartTimeframeManager.setTimeframe(this.timeframe, (formatted, timeLeft, tf) => {
+                    this.updateExpirationOverlay(tf, formatted, timeLeft);
+                });
             }
         }
         
@@ -1303,9 +1337,15 @@ class ChartManager {
         // Обновляем таймер экспирации только для candles/bars
         if (this.chartType !== 'line' && window.chartTimeframeManager) {
             window.chartTimeframeManager.setTimeframe(timeframe, (formatted, timeLeft, tf) => {
-                // Callback больше ничего не делает - время экспирации не отображается
-                // Таймер работает только для внутренней логики группировки свечей
+                // Обновляем отображение времени экспирации
+                this.updateExpirationOverlay(tf, formatted, timeLeft);
             });
+        } else if (this.chartType === 'line') {
+            // Для line графика убираем таймер
+            const timerElement = document.getElementById('chart-expiration-timer');
+            if (timerElement) {
+                timerElement.remove();
+            }
         }
         
         window.errorLogger?.info('chart', 'Timeframe changed', { timeframe });
