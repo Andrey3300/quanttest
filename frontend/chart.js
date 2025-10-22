@@ -991,6 +991,11 @@ class ChartManager {
         // Обновляем текущую цену для оверлея экспирации
         this.currentPrice = price;
         
+        // Обновляем PriceLine с новой ценой (голубая линия)
+        if (this.expirationPriceLine && this.chartType !== 'line') {
+            this.updateExpirationPriceLine();
+        }
+        
         // Обновляем позицию оверлея экспирации (если он существует)
         if (this.expirationOverlay && this.chartType !== 'line') {
             this.updateExpirationOverlayPosition();
@@ -1096,26 +1101,33 @@ class ChartManager {
             this.expirationOverlay.style.left = `${x + offsetX}px`;
             this.expirationOverlay.style.top = `${y}px`;
             this.expirationOverlay.style.transform = 'translateY(-50%)';
-            
-            // Обновляем PriceLine для отображения линии и цены справа
-            if (this.expirationPriceLine) {
-                const activeSeries = this.getActiveSeries();
-                if (activeSeries) {
-                    activeSeries.removePriceLine(this.expirationPriceLine);
-                    this.expirationPriceLine = activeSeries.createPriceLine({
-                        price: this.currentPrice,
-                        color: '#4f9fff',
-                        lineWidth: 2,
-                        lineStyle: LightweightCharts.LineStyle.Solid,
-                        axisLabelVisible: true,
-                        title: '',
-                        axisLabelColor: '#4f9fff',
-                        axisLabelTextColor: '#ffffff'
-                    });
-                }
-            }
         } catch (error) {
             window.errorLogger?.error('chart', 'Error updating expiration overlay position', { error: error.message });
+        }
+    }
+    
+    // Обновить PriceLine с новой ценой (голубая линия)
+    updateExpirationPriceLine() {
+        if (!this.expirationPriceLine || !this.currentPrice) return;
+        
+        const activeSeries = this.getActiveSeries();
+        if (!activeSeries) return;
+        
+        try {
+            // Удаляем старую линию и создаем новую с обновленной ценой
+            activeSeries.removePriceLine(this.expirationPriceLine);
+            this.expirationPriceLine = activeSeries.createPriceLine({
+                price: this.currentPrice,
+                color: '#4f9fff',
+                lineWidth: 2,
+                lineStyle: LightweightCharts.LineStyle.Solid,
+                axisLabelVisible: true,
+                title: '',
+                axisLabelColor: '#4f9fff',
+                axisLabelTextColor: '#ffffff'
+            });
+        } catch (error) {
+            window.errorLogger?.error('chart', 'Error updating expiration price line', { error: error.message });
         }
     }
     
