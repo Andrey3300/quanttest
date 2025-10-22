@@ -76,7 +76,7 @@ class ChartManager {
                 secondsVisible: true,
                 barSpacing: 8, // Делаем свечи толще
                 minBarSpacing: 4, // Минимальная толщина при максимальном отдалении
-                rightOffset: 12, // Отступ справа для последней свечи
+                rightOffset: 50, // Увеличен отступ справа для последней свечи
                 lockVisibleTimeRangeOnResize: true,
             },
         });
@@ -179,7 +179,7 @@ class ChartManager {
             
             // Проверяем на схлопывание
             const visibleBars = range.to - range.from;
-            const rightOffsetBars = 12;
+            const rightOffsetBars = 50;
             const pureVisibleBars = visibleBars - rightOffsetBars;
             
             if (pureVisibleBars < this.MIN_VISIBLE_BARS) {
@@ -301,7 +301,7 @@ class ChartManager {
             // Устанавливаем начальный видимый диапазон (последние ~100 свечей)
             if (data.length > 0) {
                 // Используем фиксированный отступ справа (rightOffset из настроек)
-                const rightOffsetBars = 12; // соответствует rightOffset в настройках
+                const rightOffsetBars = 50; // соответствует rightOffset в настройках
                 const visibleLogicalRange = {
                     from: Math.max(0, data.length - 100),
                     to: data.length - 1 + rightOffsetBars
@@ -683,7 +683,7 @@ class ChartManager {
                         const currentRange = timeScale.getVisibleLogicalRange();
                         
                         if (currentRange) {
-                            const rightOffsetBars = 12; // фиксированный отступ справа из настроек
+                            const rightOffsetBars = 50; // фиксированный отступ справа из настроек
                             
                             // РЕШЕНИЕ #4: Используем candleCount напрямую, не создаем промежуточных переменных
                             // которые могут внести путаницу
