@@ -1209,7 +1209,40 @@ body {
     display: none;
 }
 
-/* ===== CHART EXPIRATION TIMER ===== */
+/* ===== CHART EXPIRATION OVERLAY ===== */
+.expiration-overlay {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    pointer-events: none;
+    z-index: 100;
+    white-space: nowrap;
+}
+
+.expiration-time {
+    font-size: 12px;
+    color: var(--accent-blue);
+    font-weight: 600;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+    background: transparent;
+    padding: 2px 0;
+    transform: translateY(-100%);
+    margin-bottom: 2px;
+}
+
+.time-to-expiration {
+    font-size: 12px;
+    color: var(--text-secondary);
+    font-weight: 600;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+    background: transparent;
+    padding: 2px 0;
+    margin-top: 2px;
+}
+
+/* ===== CHART EXPIRATION TIMER (старый вариант - для совместимости) ===== */
 .chart-expiration-timer {
     position: absolute;
     top: 16px;
