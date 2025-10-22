@@ -411,10 +411,34 @@ class ChartManager {
 
                     } else if (message.type === 'tick') {
                         // Обновление текущей свечи
+                        window.errorLogger?.debug('websocket', 'Received tick', {
+                            candleTime: message.data.time,
+                            open: message.data.open,
+                            close: message.data.close,
+                            lastCandleTime: this.lastCandle?.time,
+                            lastCandleClose: this.lastCandle?.close
+                        });
                         this.updateCandle(message.data, false);
                         
                     } else if (message.type === 'newCandle') {
                         // Новая свеча
+                        window.errorLogger?.info('websocket', '🆕 NEW CANDLE received', {
+                            newCandleTime: message.data.time,
+                            newCandleOpen: message.data.open,
+                            newCandleClose: message.data.close,
+                            previousCandleTime: this.lastCandle?.time,
+                            previousCandleClose: this.lastCandle?.close,
+                            isContinuous: this.lastCandle ? (message.data.open === this.lastCandle.close) : 'N/A'
+                        });
+                        console.log(`🆕 NEW CANDLE: time=${message.data.time}, open=${message.data.open}, close=${message.data.close}`);
+                        if (this.lastCandle) {
+                            console.log(`   Previous candle: time=${this.lastCandle.time}, close=${this.lastCandle.close}`);
+                            if (message.data.open !== this.lastCandle.close) {
+                                console.error(`   ❌ DISCONTINUITY DETECTED: prev.close=${this.lastCandle.close} !== new.open=${message.data.open}`);
+                            } else {
+                                console.log(`   ✅ Continuous: prev.close === new.open`);
+                            }
+                        }
                         this.updateCandle(message.data, true);
                         
                     } else if (message.type === 'candle') {

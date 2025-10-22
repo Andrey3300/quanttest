@@ -224,19 +224,35 @@ class ChartGenerator {
         // Это гарантирует что open новой свечи = close предыдущей (НЕПРЕРЫВНОСТЬ)
         if (this.candles.length > 0) {
             const lastCandle = this.candles[this.candles.length - 1];
-            // Используем ТОЧНОЕ значение close (уже округленное)
-            this.currentPrice = lastCandle.close;
             
-            logger.debug('candle', 'Continuity check', {
+            // КРИТИЧЕСКИ ВАЖНО: Берем РЕАЛЬНОЕ значение close из массива свечей
+            // а не из currentCandleState, т.к. оно может быть не синхронизировано
+            const actualLastClose = lastCandle.close;
+            
+            // Используем ТОЧНОЕ значение close (уже округленное)
+            this.currentPrice = actualLastClose;
+            
+            logger.debug('candle', 'Continuity check before creating new candle', {
                 symbol: this.symbol,
-                lastCandleClose: lastCandle.close,
+                lastCandleClose: actualLastClose,
+                lastCandleTime: lastCandle.time,
                 nextCandleOpen: this.currentPrice,
-                isContinuous: (lastCandle.close === this.currentPrice)
+                isContinuous: (actualLastClose === this.currentPrice),
+                currentCandleStateClose: this.currentCandleState?.close,
+                stateMatchesLast: (this.currentCandleState?.close === actualLastClose)
             });
         }
         
         // Новая свеча ВСЕГДА начинается с ТОЧНОЙ цены закрытия предыдущей свечи
+        // КРИТИЧЕСКИ ВАЖНО: openPrice должен быть ТОЧНО равен close последней свечи из массива
         const openPrice = this.currentPrice;
+        
+        logger.debug('candle', 'Creating new candle with open price', {
+            symbol: this.symbol,
+            openPrice: openPrice,
+            currentPrice: this.currentPrice,
+            source: 'lastCandle.close'
+        });
         
         // ИСПРАВЛЕНИЕ: Синхронизируем timestamp с РЕАЛЬНЫМ временем, а не с последней свечой
         // Это гарантирует что свечи создаются в правильной временной последовательности
@@ -306,11 +322,13 @@ class ChartGenerator {
         
         // КРИТИЧЕСКОЕ УЛУЧШЕНИЕ: Генерируем полноценную свечу с вариацией сразу
         // Убедимся что openPrice = close последней свечи
-        const candle = this.generateCandle(alignedTimestamp * 1000, this.currentPrice);
+        const candle = this.generateCandle(alignedTimestamp * 1000, openPrice);
         
         // ВАЛИДАЦИЯ НЕПРЕРЫВНОСТИ: Проверяем что open новой свечи = close предыдущей
         if (this.candles.length > 0) {
             const lastCandle = this.candles[this.candles.length - 1];
+            
+            // КРИТИЧЕСКАЯ ПРОВЕРКА: open новой свечи ДОЛЖЕН быть равен close предыдущей
             if (candle.open !== lastCandle.close) {
                 logger.error('candle', 'CONTINUITY BROKEN! New candle open != previous candle close', {
                     symbol: this.symbol,
@@ -318,9 +336,25 @@ class ChartGenerator {
                     newOpen: candle.open,
                     difference: Math.abs(candle.open - lastCandle.close),
                     previousCandleTime: lastCandle.time,
-                    newCandleTime: candle.time
+                    newCandleTime: candle.time,
+                    providedOpenPrice: openPrice
                 });
-                console.error(`❌ CONTINUITY BROKEN for ${this.symbol}! Previous close: ${lastCandle.close}, New open: ${candle.open}`);
+                console.error(`❌ CONTINUITY BROKEN for ${this.symbol}! Previous close: ${lastCandle.close}, New open: ${candle.open}, Provided openPrice: ${openPrice}`);
+                
+                // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Принудительно устанавливаем правильный open
+                candle.open = lastCandle.close;
+                
+                // Пересчитываем high и low с учетом нового open
+                candle.high = Math.max(candle.high, candle.open);
+                candle.low = Math.min(candle.low, candle.open);
+                
+                logger.info('candle', 'Continuity auto-fixed', {
+                    symbol: this.symbol,
+                    correctedOpen: candle.open,
+                    newHigh: candle.high,
+                    newLow: candle.low
+                });
+                console.log(`✓ Continuity auto-fixed for ${this.symbol}: open corrected to ${candle.open}`);
             } else {
                 logger.debug('candle', 'Continuity verified ✓', {
                     symbol: this.symbol,
@@ -465,12 +499,27 @@ class ChartGenerator {
         if (this.candles.length > 0) {
             const lastCandle = this.candles[this.candles.length - 1];
             if (lastCandle.time === this.currentCandleState.time) {
-                // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: НЕ ИЗМЕНЯЕМ open при тиках!
-                // lastCandle.open = this.currentCandleState.open; // НЕ МЕНЯЕМ!
+                // КРИТИЧЕСКОЕ ПРАВИЛО: НЕ ИЗМЕНЯЕМ open при тиках!
+                // open должен оставаться неизменным на протяжении всей жизни свечи
+                const originalOpen = lastCandle.open;
+                
+                // Обновляем только изменяемые параметры
                 lastCandle.close = this.currentCandleState.close;
                 lastCandle.high = this.currentCandleState.high;
                 lastCandle.low = this.currentCandleState.low;
                 lastCandle.volume = this.currentCandleState.volume;
+                
+                // ВАЛИДАЦИЯ: Проверяем что open не изменился
+                if (lastCandle.open !== originalOpen) {
+                    logger.error('candle', 'CRITICAL: open was modified during tick!', {
+                        symbol: this.symbol,
+                        originalOpen: originalOpen,
+                        currentOpen: lastCandle.open,
+                        candleTime: lastCandle.time
+                    });
+                    // Восстанавливаем оригинальный open
+                    lastCandle.open = originalOpen;
+                }
             }
         }
         
