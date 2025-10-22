@@ -71,26 +71,33 @@ class ChartGenerator {
 
     // Генерация одной свечи с реалистичным OHLC
     generateCandle(timestamp, openPrice) {
-        const close = this.generateNextPrice(openPrice);
+        // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Определяем точность ДО любых вычислений
+        const precision = this.getPricePrecision(this.basePrice);
+        
+        // ВАЖНО: openPrice уже округлен (это close предыдущей свечи)
+        // НЕ округляем его повторно, чтобы сохранить непрерывность
+        const open = openPrice;
+        
+        const close = this.generateNextPrice(open);
         
         // Генерируем high и low с реалистичной волатильностью внутри свечи
         const intraVolatility = this.volatility * 0.4; // уменьшенная внутри-свечная волатильность для меньших фитилей
         
         // Ограничение максимального размера фитиля относительно тела свечи
-        const bodySize = Math.abs(close - openPrice);
+        const bodySize = Math.abs(close - open);
 
         const maxWickMultiplier = bodySize > 0 ? 0.4 : 0.3; // фитиль намного меньше тела (уменьшено с 2.0 до 0.4)
 
         const maxWickSize = bodySize > 0 ? bodySize * maxWickMultiplier : this.basePrice * 0.002;
         
         // High должен быть выше open и close
-        const maxPrice = Math.max(openPrice, close);
+        const maxPrice = Math.max(open, close);
         let wickHighSize = Math.abs(this.randomNormal(0, intraVolatility)) * maxPrice;
         wickHighSize = Math.min(wickHighSize, maxWickSize); // ограничиваем размер фитиля
         const high = maxPrice + wickHighSize;
         
         // Low должен быть ниже open и close
-        const minPrice = Math.min(openPrice, close);
+        const minPrice = Math.min(open, close);
         let wickLowSize = Math.abs(this.randomNormal(0, intraVolatility)) * minPrice;
         wickLowSize = Math.min(wickLowSize, maxWickSize); // ограничиваем размер фитиля
         const low = minPrice - wickLowSize;
@@ -100,16 +107,9 @@ class ChartGenerator {
         const volumeVariance = 0.5;
         const volume = Math.floor(baseVolume * (1 + this.randomNormal(0, volumeVariance)));
         
-
-        // УЛУЧШЕНИЕ: Определяем точность для этого актива
-
-        // Определяем точность для этого актива
-
-        const precision = this.getPricePrecision(this.basePrice);
-        
         return {
             time: Math.floor(timestamp / 1000), // время в секундах для lightweight-charts
-            open: parseFloat(openPrice.toFixed(precision)),
+            open: parseFloat(open.toFixed(precision)), // Округляем для консистентности
             high: parseFloat(high.toFixed(precision)),
             low: parseFloat(low.toFixed(precision)),
             close: parseFloat(close.toFixed(precision)),
@@ -130,13 +130,58 @@ class ChartGenerator {
         const startTime = alignedNow - (days * 24 * 60 * 60 * 1000); // 7 дней назад
         const totalCandles = Math.floor((alignedNow - startTime) / (intervalSeconds * 1000));
         
-        let currentPrice = this.basePrice;
+        // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Округляем basePrice сразу для точности
+        const precision = this.getPricePrecision(this.basePrice);
+        let currentPrice = parseFloat(this.basePrice.toFixed(precision));
         
         for (let i = 0; i < totalCandles; i++) {
             const timestamp = startTime + (i * intervalSeconds * 1000);
             const candle = this.generateCandle(timestamp, currentPrice);
+            
+            // ВАЛИДАЦИЯ: Проверяем что open совпадает с ожидаемой ценой
+            if (candle.open !== currentPrice) {
+                logger.error('historical', 'Continuity broken in historical data!', {
+                    symbol: this.symbol,
+                    candleIndex: i,
+                    expectedOpen: currentPrice,
+                    actualOpen: candle.open,
+                    difference: Math.abs(candle.open - currentPrice)
+                });
+            }
+            
             candles.push(candle);
-            currentPrice = candle.close; // следующая свеча начинается с close предыдущей
+            
+            // КРИТИЧЕСКИ ВАЖНО: Используем округленный close для непрерывности
+            currentPrice = candle.close; // следующая свеча начинается ТОЧНО с close предыдущей
+        }
+        
+        // ФИНАЛЬНАЯ ВАЛИДАЦИЯ: Проверим непрерывность всех свечей
+        let continuityErrors = 0;
+        for (let i = 1; i < candles.length; i++) {
+            if (candles[i].open !== candles[i-1].close) {
+                continuityErrors++;
+                if (continuityErrors <= 5) { // Логируем только первые 5 ошибок
+                    logger.error('historical', 'Continuity error detected', {
+                        symbol: this.symbol,
+                        candleIndex: i,
+                        previousClose: candles[i-1].close,
+                        currentOpen: candles[i].open,
+                        difference: Math.abs(candles[i].open - candles[i-1].close)
+                    });
+                }
+            }
+        }
+        
+        if (continuityErrors > 0) {
+            logger.error('historical', `Total continuity errors: ${continuityErrors} out of ${candles.length} candles`, {
+                symbol: this.symbol,
+                errorRate: (continuityErrors / candles.length * 100).toFixed(2) + '%'
+            });
+        } else {
+            logger.info('historical', 'All candles are continuous ✓', {
+                symbol: this.symbol,
+                totalCandles: candles.length
+            });
         }
         
         this.candles = candles;
@@ -176,12 +221,21 @@ class ChartGenerator {
         const intervalSeconds = 5; // интервал свечи
         
         // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Синхронизируем currentPrice с close последней свечи
+        // Это гарантирует что open новой свечи = close предыдущей (НЕПРЕРЫВНОСТЬ)
         if (this.candles.length > 0) {
             const lastCandle = this.candles[this.candles.length - 1];
-            this.currentPrice = lastCandle.close; // Гарантируем непрерывность!
+            // Используем ТОЧНОЕ значение close (уже округленное)
+            this.currentPrice = lastCandle.close;
+            
+            logger.debug('candle', 'Continuity check', {
+                symbol: this.symbol,
+                lastCandleClose: lastCandle.close,
+                nextCandleOpen: this.currentPrice,
+                isContinuous: (lastCandle.close === this.currentPrice)
+            });
         }
         
-        // Новая свеча ВСЕГДА начинается с цены закрытия предыдущей свечи
+        // Новая свеча ВСЕГДА начинается с ТОЧНОЙ цены закрытия предыдущей свечи
         const openPrice = this.currentPrice;
         
         // ИСПРАВЛЕНИЕ: Синхронизируем timestamp с РЕАЛЬНЫМ временем, а не с последней свечой
@@ -203,9 +257,19 @@ class ChartGenerator {
                 });
                 // Используем timestamp последней свечи + интервал
                 const timestamp = lastCandle.time + intervalSeconds;
-                // Убедимся что openPrice = close предыдущей свечи
-                const adjustedOpenPrice = lastCandle.close;
+                // КРИТИЧНО: openPrice ДОЛЖЕН быть ТОЧНО равен close предыдущей свечи
+                const adjustedOpenPrice = lastCandle.close; // Уже округленное значение!
                 const candle = this.generateCandle(timestamp * 1000, adjustedOpenPrice);
+                
+                // ВАЛИДАЦИЯ: Проверяем непрерывность
+                if (candle.open !== adjustedOpenPrice) {
+                    logger.error('candle', 'CONTINUITY BROKEN in adjusted candle!', {
+                        symbol: this.symbol,
+                        expectedOpen: adjustedOpenPrice,
+                        actualOpen: candle.open,
+                        difference: Math.abs(candle.open - adjustedOpenPrice)
+                    });
+                }
                 
                 this.candles.push(candle);
                 this.currentPrice = candle.close;
@@ -243,6 +307,29 @@ class ChartGenerator {
         // КРИТИЧЕСКОЕ УЛУЧШЕНИЕ: Генерируем полноценную свечу с вариацией сразу
         // Убедимся что openPrice = close последней свечи
         const candle = this.generateCandle(alignedTimestamp * 1000, this.currentPrice);
+        
+        // ВАЛИДАЦИЯ НЕПРЕРЫВНОСТИ: Проверяем что open новой свечи = close предыдущей
+        if (this.candles.length > 0) {
+            const lastCandle = this.candles[this.candles.length - 1];
+            if (candle.open !== lastCandle.close) {
+                logger.error('candle', 'CONTINUITY BROKEN! New candle open != previous candle close', {
+                    symbol: this.symbol,
+                    previousClose: lastCandle.close,
+                    newOpen: candle.open,
+                    difference: Math.abs(candle.open - lastCandle.close),
+                    previousCandleTime: lastCandle.time,
+                    newCandleTime: candle.time
+                });
+                console.error(`❌ CONTINUITY BROKEN for ${this.symbol}! Previous close: ${lastCandle.close}, New open: ${candle.open}`);
+            } else {
+                logger.debug('candle', 'Continuity verified ✓', {
+                    symbol: this.symbol,
+                    price: candle.open,
+                    previousClose: lastCandle.close,
+                    newOpen: candle.open
+                });
+            }
+        }
         
         this.candles.push(candle);
         this.currentPrice = candle.close;
