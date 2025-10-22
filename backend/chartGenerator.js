@@ -9,11 +9,7 @@ class ChartGenerator {
         this.basePrice = basePrice;
         this.currentPrice = basePrice;
         
-
-        // УЛУЧШЕНИЕ: Увеличиваем волатильность пропорционально для больших чисел
-
         // Увеличиваем волатильность пропорционально для больших чисел
-
         if (basePrice > 10000) {
             volatility = volatility * (1 + Math.log10(basePrice / 10000));
         }
@@ -54,62 +50,44 @@ class ChartGenerator {
         return newPrice;
     }
 
-
-    // УЛУЧШЕНИЕ: Определение точности цены на основе базовой цены
+    // Определение точности цены на основе базовой цены
     getPricePrecision(price) {
-        if (price >= 10000) return 1;     // Крупные активы: UAH_USD_OTC: 68623.2
-        if (price >= 1000) return 2;      // Криптовалюты: BTC: 68750.23
-        if (price >= 100) return 3;       // Средние криптовалюты: ETH: 3450.123
-        if (price >= 10) return 4;        // Валютные пары: USD/MXN: 18.9167
-        if (price >= 1) return 4;         // Основные пары: EUR/USD: 1.0850
-        if (price >= 0.1) return 5;       // Альткоины: DOGE: 0.14523
-        if (price >= 0.01) return 6;      // Микро-пары
-        return 8;                          // Минимальные активы
-
-    
+        if (price >= 10000) return 1;     // Например UAH_USD_OTC: 68623.2
+        if (price >= 1000) return 2;      // Например BTC: 68750.23
+        if (price >= 100) return 3;       // Например ETH: 3450.123
+        if (price >= 10) return 4;        // Например USD/MXN: 18.9167
+        if (price >= 1) return 4;         // Например EUR/USD: 1.0850
+        if (price >= 0.1) return 5;       // Например DOGE: 0.14523
+        if (price >= 0.01) return 6;      // Например маленькие пары
+        return 8;                          // Для очень маленьких цен
     }
 
     // Генерация одной свечи с реалистичным OHLC
     generateCandle(timestamp, openPrice) {
-        // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Определяем точность ДО любых вычислений
-        const precision = this.getPricePrecision(this.basePrice);
-        
-        // ВАЖНО: openPrice уже округлен (это close предыдущей свечи)
-        // НЕ округляем его повторно, чтобы сохранить непрерывность
-        const open = openPrice;
-        
-        const close = this.generateNextPrice(open);
+        const close = this.generateNextPrice(openPrice);
         
         // Генерируем high и low с реалистичной волатильностью внутри свечи
-        const intraVolatility = this.volatility * 0.4; // уменьшенная внутри-свечная волатильность для меньших фитилей
-        
-        // Ограничение максимального размера фитиля относительно тела свечи
-        const bodySize = Math.abs(close - open);
-
-        const maxWickMultiplier = bodySize > 0 ? 0.4 : 0.3; // фитиль намного меньше тела (уменьшено с 2.0 до 0.4)
-
-        const maxWickSize = bodySize > 0 ? bodySize * maxWickMultiplier : this.basePrice * 0.002;
+        const intraVolatility = this.volatility * 1.5; // внутри-свечная волатильность выше
         
         // High должен быть выше open и close
-        const maxPrice = Math.max(open, close);
-        let wickHighSize = Math.abs(this.randomNormal(0, intraVolatility)) * maxPrice;
-        wickHighSize = Math.min(wickHighSize, maxWickSize); // ограничиваем размер фитиля
-        const high = maxPrice + wickHighSize;
+        const maxPrice = Math.max(openPrice, close);
+        const high = maxPrice * (1 + Math.abs(this.randomNormal(0, intraVolatility)));
         
         // Low должен быть ниже open и close
-        const minPrice = Math.min(open, close);
-        let wickLowSize = Math.abs(this.randomNormal(0, intraVolatility)) * minPrice;
-        wickLowSize = Math.min(wickLowSize, maxWickSize); // ограничиваем размер фитиля
-        const low = minPrice - wickLowSize;
+        const minPrice = Math.min(openPrice, close);
+        const low = minPrice * (1 - Math.abs(this.randomNormal(0, intraVolatility)));
         
         // Генерируем объем (случайный в диапазоне)
         const baseVolume = 10000;
         const volumeVariance = 0.5;
         const volume = Math.floor(baseVolume * (1 + this.randomNormal(0, volumeVariance)));
         
+        // Определяем точность для этого актива
+        const precision = this.getPricePrecision(this.basePrice);
+        
         return {
             time: Math.floor(timestamp / 1000), // время в секундах для lightweight-charts
-            open: parseFloat(open.toFixed(precision)), // Округляем для консистентности
+            open: parseFloat(openPrice.toFixed(precision)),
             high: parseFloat(high.toFixed(precision)),
             low: parseFloat(low.toFixed(precision)),
             close: parseFloat(close.toFixed(precision)),
@@ -130,58 +108,13 @@ class ChartGenerator {
         const startTime = alignedNow - (days * 24 * 60 * 60 * 1000); // 7 дней назад
         const totalCandles = Math.floor((alignedNow - startTime) / (intervalSeconds * 1000));
         
-        // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Округляем basePrice сразу для точности
-        const precision = this.getPricePrecision(this.basePrice);
-        let currentPrice = parseFloat(this.basePrice.toFixed(precision));
+        let currentPrice = this.basePrice;
         
         for (let i = 0; i < totalCandles; i++) {
             const timestamp = startTime + (i * intervalSeconds * 1000);
             const candle = this.generateCandle(timestamp, currentPrice);
-            
-            // ВАЛИДАЦИЯ: Проверяем что open совпадает с ожидаемой ценой
-            if (candle.open !== currentPrice) {
-                logger.error('historical', 'Continuity broken in historical data!', {
-                    symbol: this.symbol,
-                    candleIndex: i,
-                    expectedOpen: currentPrice,
-                    actualOpen: candle.open,
-                    difference: Math.abs(candle.open - currentPrice)
-                });
-            }
-            
             candles.push(candle);
-            
-            // КРИТИЧЕСКИ ВАЖНО: Используем округленный close для непрерывности
-            currentPrice = candle.close; // следующая свеча начинается ТОЧНО с close предыдущей
-        }
-        
-        // ФИНАЛЬНАЯ ВАЛИДАЦИЯ: Проверим непрерывность всех свечей
-        let continuityErrors = 0;
-        for (let i = 1; i < candles.length; i++) {
-            if (candles[i].open !== candles[i-1].close) {
-                continuityErrors++;
-                if (continuityErrors <= 5) { // Логируем только первые 5 ошибок
-                    logger.error('historical', 'Continuity error detected', {
-                        symbol: this.symbol,
-                        candleIndex: i,
-                        previousClose: candles[i-1].close,
-                        currentOpen: candles[i].open,
-                        difference: Math.abs(candles[i].open - candles[i-1].close)
-                    });
-                }
-            }
-        }
-        
-        if (continuityErrors > 0) {
-            logger.error('historical', `Total continuity errors: ${continuityErrors} out of ${candles.length} candles`, {
-                symbol: this.symbol,
-                errorRate: (continuityErrors / candles.length * 100).toFixed(2) + '%'
-            });
-        } else {
-            logger.info('historical', 'All candles are continuous ✓', {
-                symbol: this.symbol,
-                totalCandles: candles.length
-            });
+            currentPrice = candle.close; // следующая свеча начинается с close предыдущей
         }
         
         this.candles = candles;
@@ -218,157 +151,51 @@ class ChartGenerator {
     // Генерация новой свечи для real-time обновления
     generateNextCandle() {
         const now = Date.now();
+        const precision = this.getPricePrecision(this.basePrice);
         const intervalSeconds = 5; // интервал свечи
         
-        // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Синхронизируем currentPrice с close последней свечи
-        // Это гарантирует что open новой свечи = close предыдущей (НЕПРЕРЫВНОСТЬ)
+        // Новая свеча ВСЕГДА начинается с цены закрытия предыдущей свечи
+        const openPrice = this.currentPrice;
+        
+        // РЕШЕНИЕ #1: Не полагаемся на Date.now() для timestamp, а рассчитываем от последней свечи
+        // Это гарантирует монотонность времени и убирает зависимость от точности setInterval
+        let timestamp;
         if (this.candles.length > 0) {
             const lastCandle = this.candles[this.candles.length - 1];
+            // ВСЕГДА следующий интервал - гарантирует что timestamp строго больше предыдущего
+            timestamp = lastCandle.time + intervalSeconds;
             
-            // КРИТИЧЕСКИ ВАЖНО: Берем РЕАЛЬНОЕ значение close из массива свечей
-            // а не из currentCandleState, т.к. оно может быть не синхронизировано
-            const actualLastClose = lastCandle.close;
-            
-            // Используем ТОЧНОЕ значение close (уже округленное)
-            this.currentPrice = actualLastClose;
-            
-            logger.debug('candle', 'Continuity check before creating new candle', {
+            logger.debug('candle', 'Calculated timestamp from last candle', { 
                 symbol: this.symbol,
-                lastCandleClose: actualLastClose,
-                lastCandleTime: lastCandle.time,
-                nextCandleOpen: this.currentPrice,
-                isContinuous: (actualLastClose === this.currentPrice),
-                currentCandleStateClose: this.currentCandleState?.close,
-                stateMatchesLast: (this.currentCandleState?.close === actualLastClose)
+                lastTime: lastCandle.time,
+                newTime: timestamp,
+                intervalSeconds: intervalSeconds
+            });
+        } else {
+            // Только для первой свечи выравниваем по сетке
+            const currentTimeSeconds = Math.floor(now / 1000);
+            timestamp = Math.floor(currentTimeSeconds / intervalSeconds) * intervalSeconds;
+            
+            logger.debug('candle', 'First candle - aligned to grid', { 
+                symbol: this.symbol,
+                timestamp: timestamp
             });
         }
         
-        // Новая свеча ВСЕГДА начинается с ТОЧНОЙ цены закрытия предыдущей свечи
-        // КРИТИЧЕСКИ ВАЖНО: openPrice должен быть ТОЧНО равен close последней свечи из массива
-        const openPrice = this.currentPrice;
-        
-        logger.debug('candle', 'Creating new candle with open price', {
-            symbol: this.symbol,
-            openPrice: openPrice,
-            currentPrice: this.currentPrice,
-            source: 'lastCandle.close'
-        });
-        
-        // ИСПРАВЛЕНИЕ: Синхронизируем timestamp с РЕАЛЬНЫМ временем, а не с последней свечой
-        // Это гарантирует что свечи создаются в правильной временной последовательности
-        const currentTimeSeconds = Math.floor(now / 1000);
-        const alignedTimestamp = Math.floor(currentTimeSeconds / intervalSeconds) * intervalSeconds;
-        
-        // Проверяем что новый timestamp больше последней свечи
-        if (this.candles.length > 0) {
-            const lastCandle = this.candles[this.candles.length - 1];
-            
-            // Если выровненный timestamp не больше последней свечи, берем следующий интервал
-            if (alignedTimestamp <= lastCandle.time) {
-                logger.warn('candle', 'Timestamp collision detected - adjusting', {
-                    symbol: this.symbol,
-                    alignedTimestamp: alignedTimestamp,
-                    lastCandleTime: lastCandle.time,
-                    adjustment: 'Using next interval'
-                });
-                // Используем timestamp последней свечи + интервал
-                const timestamp = lastCandle.time + intervalSeconds;
-                // КРИТИЧНО: openPrice ДОЛЖЕН быть ТОЧНО равен close предыдущей свечи
-                const adjustedOpenPrice = lastCandle.close; // Уже округленное значение!
-                const candle = this.generateCandle(timestamp * 1000, adjustedOpenPrice);
-                
-                // ВАЛИДАЦИЯ: Проверяем непрерывность
-                if (candle.open !== adjustedOpenPrice) {
-                    logger.error('candle', 'CONTINUITY BROKEN in adjusted candle!', {
-                        symbol: this.symbol,
-                        expectedOpen: adjustedOpenPrice,
-                        actualOpen: candle.open,
-                        difference: Math.abs(candle.open - adjustedOpenPrice)
-                    });
-                }
-                
-                this.candles.push(candle);
-                this.currentPrice = candle.close;
-                
-                // Обновляем currentCandleState для новой свечи
-                this.currentCandleState = {
-                    time: candle.time,
-                    open: candle.open,
-                    high: candle.high,
-                    low: candle.low,
-                    close: candle.close,
-                    volume: candle.volume,
-                    targetClose: candle.close,
-                    targetHigh: candle.high,
-                    targetLow: candle.low
-                };
-                
-                // Ограничиваем размер массива
-                const maxCandles = 7 * 24 * 60 * 12;
-                if (this.candles.length > maxCandles) {
-                    this.candles.shift();
-                }
-                
-                logger.info('candle', 'New candle created (adjusted)', {
-                    symbol: this.symbol,
-                    time: candle.time,
-                    open: candle.open,
-                    close: candle.close
-                });
-                
-                return candle;
-            }
-        }
-        
-        // КРИТИЧЕСКОЕ УЛУЧШЕНИЕ: Генерируем полноценную свечу с вариацией сразу
-        // Убедимся что openPrice = close последней свечи
-        const candle = this.generateCandle(alignedTimestamp * 1000, openPrice);
-        
-        // ВАЛИДАЦИЯ НЕПРЕРЫВНОСТИ: Проверяем что open новой свечи = close предыдущей
-        if (this.candles.length > 0) {
-            const lastCandle = this.candles[this.candles.length - 1];
-            
-            // КРИТИЧЕСКАЯ ПРОВЕРКА: open новой свечи ДОЛЖЕН быть равен close предыдущей
-            if (candle.open !== lastCandle.close) {
-                logger.error('candle', 'CONTINUITY BROKEN! New candle open != previous candle close', {
-                    symbol: this.symbol,
-                    previousClose: lastCandle.close,
-                    newOpen: candle.open,
-                    difference: Math.abs(candle.open - lastCandle.close),
-                    previousCandleTime: lastCandle.time,
-                    newCandleTime: candle.time,
-                    providedOpenPrice: openPrice
-                });
-                console.error(`❌ CONTINUITY BROKEN for ${this.symbol}! Previous close: ${lastCandle.close}, New open: ${candle.open}, Provided openPrice: ${openPrice}`);
-                
-                // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Принудительно устанавливаем правильный open
-                candle.open = lastCandle.close;
-                
-                // Пересчитываем high и low с учетом нового open
-                candle.high = Math.max(candle.high, candle.open);
-                candle.low = Math.min(candle.low, candle.open);
-                
-                logger.info('candle', 'Continuity auto-fixed', {
-                    symbol: this.symbol,
-                    correctedOpen: candle.open,
-                    newHigh: candle.high,
-                    newLow: candle.low
-                });
-                console.log(`✓ Continuity auto-fixed for ${this.symbol}: open corrected to ${candle.open}`);
-            } else {
-                logger.debug('candle', 'Continuity verified ✓', {
-                    symbol: this.symbol,
-                    price: candle.open,
-                    previousClose: lastCandle.close,
-                    newOpen: candle.open
-                });
-            }
-        }
+        // Генерируем полноценную свечу с вариацией сразу
+        // Используем существующий метод generateCandle() вместо плоской свечи
+        const candle = this.generateCandle(timestamp * 1000, openPrice);
         
         this.candles.push(candle);
-        this.currentPrice = candle.close;
         
-        // Обновляем currentCandleState для новой свечи
+        // Ограничиваем размер массива (храним последние 7 дней)
+        const maxCandles = 7 * 24 * 60 * 12; // 7 дней * 5-секундные свечи
+        if (this.candles.length > maxCandles) {
+            this.candles.shift();
+        }
+        
+        // Инициализируем состояние текущей свечи для плавных обновлений
+        // Начинаем с текущей цены и позволяем тикам развивать свечу
         this.currentCandleState = {
             time: candle.time,
             open: candle.open,
@@ -381,23 +208,29 @@ class ChartGenerator {
             targetLow: candle.low
         };
         
-        // Ограничиваем размер массива (храним последние 7 дней)
-        const maxCandles = 7 * 24 * 60 * 12; // 7 дней * 5-секундные свечи
-        if (this.candles.length > maxCandles) {
-            this.candles.shift();
+        // Финальная валидация перед возвратом
+        if (typeof candle.time !== 'number' || isNaN(candle.time)) {
+            logger.error('candle', 'Invalid new candle time detected', { 
+                symbol: this.symbol,
+                candle: candle
+            });
+            console.error('Invalid new candle time:', candle);
+            candle.time = Math.floor(Date.now() / 1000);
         }
         
-        logger.info('candle', 'New candle created', {
+        // РЕШЕНИЕ #5: Детальное логирование для мониторинга
+        logger.logCandle('New candle sent to clients', this.symbol, candle);
+        logger.debug('candle', 'Candle creation details', {
             symbol: this.symbol,
             time: candle.time,
             timeISO: new Date(candle.time * 1000).toISOString(),
             open: candle.open,
             close: candle.close,
-            // Проверка непрерывности
-            previousClose: this.candles.length > 1 ? this.candles[this.candles.length - 2].close : null,
-            isContinuous: this.candles.length > 1 ? (candle.open === this.candles[this.candles.length - 2].close) : true
+            totalCandles: this.candles.length,
+            previousCandleTime: this.candles.length > 1 ? this.candles[this.candles.length - 2].time : null,
+            timeDiff: this.candles.length > 1 ? candle.time - this.candles[this.candles.length - 2].time : null
         });
-
+        
         return candle;
     }
     
@@ -469,8 +302,8 @@ class ChartGenerator {
             this.currentCandleState.targetHigh = this.currentCandleState.close;
         } else {
             // Иногда создаем фитиль вверх для реалистичности
-            if (Math.random() < 0.01) { // уменьшена вероятность с 0.03 до 0.01 для коротких фитилей
-                const wickHigh = this.currentCandleState.close * (1 + Math.abs(this.randomNormal(0, microVolatility * 0.15))); // уменьшен множитель с 0.3 до 0.15
+            if (Math.random() < 0.08) {
+                const wickHigh = this.currentCandleState.close * (1 + Math.abs(this.randomNormal(0, microVolatility * 0.5)));
                 if (wickHigh > this.currentCandleState.high && wickHigh <= this.basePrice * 1.1) {
                     this.currentCandleState.high = parseFloat(wickHigh.toFixed(precision));
                     this.currentCandleState.targetHigh = wickHigh;
@@ -483,8 +316,8 @@ class ChartGenerator {
             this.currentCandleState.targetLow = this.currentCandleState.close;
         } else {
             // Иногда создаем фитиль вниз для реалистичности
-            if (Math.random() < 0.01) { // уменьшена вероятность с 0.03 до 0.01 для коротких фитилей
-                const wickLow = this.currentCandleState.close * (1 - Math.abs(this.randomNormal(0, microVolatility * 0.15))); // уменьшен множитель с 0.3 до 0.15
+            if (Math.random() < 0.08) {
+                const wickLow = this.currentCandleState.close * (1 - Math.abs(this.randomNormal(0, microVolatility * 0.5)));
                 if (wickLow < this.currentCandleState.low && wickLow >= this.basePrice * 0.9) {
                     this.currentCandleState.low = parseFloat(wickLow.toFixed(precision));
                     this.currentCandleState.targetLow = wickLow;
@@ -499,27 +332,10 @@ class ChartGenerator {
         if (this.candles.length > 0) {
             const lastCandle = this.candles[this.candles.length - 1];
             if (lastCandle.time === this.currentCandleState.time) {
-                // КРИТИЧЕСКОЕ ПРАВИЛО: НЕ ИЗМЕНЯЕМ open при тиках!
-                // open должен оставаться неизменным на протяжении всей жизни свечи
-                const originalOpen = lastCandle.open;
-                
-                // Обновляем только изменяемые параметры
                 lastCandle.close = this.currentCandleState.close;
                 lastCandle.high = this.currentCandleState.high;
                 lastCandle.low = this.currentCandleState.low;
                 lastCandle.volume = this.currentCandleState.volume;
-                
-                // ВАЛИДАЦИЯ: Проверяем что open не изменился
-                if (lastCandle.open !== originalOpen) {
-                    logger.error('candle', 'CRITICAL: open was modified during tick!', {
-                        symbol: this.symbol,
-                        originalOpen: originalOpen,
-                        currentOpen: lastCandle.open,
-                        candleTime: lastCandle.time
-                    });
-                    // Восстанавливаем оригинальный open
-                    lastCandle.open = originalOpen;
-                }
             }
         }
         
@@ -584,35 +400,74 @@ const generators = new Map();
 
 function getGenerator(symbol) {
     if (!generators.has(symbol)) {
-
-        // УЛУЧШЕНИЕ: Настройки для разных символов с уникальными паттернами
+        // Настройки для разных символов с уникальными паттернами
         const config = {
-            // Currencies
-            'USD_MXN': { basePrice: 18.9167, volatility: 0.002, drift: 0.0 },
-            'EUR_USD': { basePrice: 1.0850, volatility: 0.0015, drift: 0.0 },
-            'GBP_USD': { basePrice: 1.2650, volatility: 0.0018, drift: 0.0 },
+            // Currencies - умеренная волатильность для естественного вида как USD/MXN
             'USD_MXN_OTC': { basePrice: 18.9167, volatility: 0.002, drift: 0.0 },
             'EUR_USD_OTC': { basePrice: 1.0850, volatility: 0.0015, drift: 0.0 },
             'GBP_USD_OTC': { basePrice: 1.2650, volatility: 0.0018, drift: 0.0 },
+            'USD_CAD': { basePrice: 1.3550, volatility: 0.0016, drift: 0.0 },
+            'AUD_CAD_OTC': { basePrice: 0.8820, volatility: 0.0019, drift: 0.0 },
+            'BHD_CNY_OTC': { basePrice: 18.6500, volatility: 0.0017, drift: 0.0 },
+            'EUR_CHF_OTC': { basePrice: 0.9420, volatility: 0.0014, drift: 0.0 },
+            'EUR_CHF_OTC2': { basePrice: 0.9425, volatility: 0.0014, drift: 0.0 },
+            'KES_USD_OTC': { basePrice: 0.0077, volatility: 0.0020, drift: 0.0 },
+            'TND_USD_OTC': { basePrice: 0.3190, volatility: 0.0018, drift: 0.0 },
             'UAH_USD_OTC': { basePrice: 68623.2282, volatility: 0.008, drift: 0.0, meanReversionSpeed: 0.01 },
+            'USD_BDT_OTC': { basePrice: 0.0092, volatility: 0.0019, drift: 0.0 },
+            'USD_CNH_OTC': { basePrice: 7.2450, volatility: 0.0016, drift: 0.0 },
+            'USD_IDR_OTC': { basePrice: 15850, volatility: 0.007, drift: 0.0, meanReversionSpeed: 0.01 },
+            'USD_MYR_OTC': { basePrice: 4.4650, volatility: 0.0017, drift: 0.0 },
+            'AUD_NZD_OTC': { basePrice: 1.0920, volatility: 0.0016, drift: 0.0 },
+            'USD_PHP_OTC': { basePrice: 0.0178, volatility: 0.0019, drift: 0.0 },
+            'ZAR_USD_OTC': { basePrice: 0.0548, volatility: 0.0021, drift: 0.0 },
+            'YER_USD_OTC': { basePrice: 0.0040, volatility: 0.0022, drift: 0.0 },
+            'USD_BRL_OTC': { basePrice: 5.6250, volatility: 0.0019, drift: 0.0 },
+            'USD_EGP_OTC': { basePrice: 0.0204, volatility: 0.0023, drift: 0.0 },
+            'OMR_CNY_OTC': { basePrice: 18.3500, volatility: 0.0016, drift: 0.0 },
+            'AUD_JPY_OTC': { basePrice: 96.850, volatility: 0.007, drift: 0.0, meanReversionSpeed: 0.01 },
+            'EUR_GBP_OTC': { basePrice: 0.8580, volatility: 0.0015, drift: 0.0 },
+            'EUR_HUF_OTC': { basePrice: 393.50, volatility: 0.008, drift: 0.0, meanReversionSpeed: 0.01 },
+            'EUR_TRY_OTC': { basePrice: 37.250, volatility: 0.0024, drift: 0.0 },
+            'USD_JPY_OTC': { basePrice: 149.850, volatility: 0.007, drift: 0.0, meanReversionSpeed: 0.01 },
+            'USD_CHF_OTC': { basePrice: 0.8690, volatility: 0.0015, drift: 0.0 },
+            'AUD_CHF': { basePrice: 0.5820, volatility: 0.0016, drift: 0.0 },
+            'CHF_JPY': { basePrice: 172.450, volatility: 0.007, drift: 0.0, meanReversionSpeed: 0.01 },
+            'EUR_AUD': { basePrice: 1.6350, volatility: 0.0017, drift: 0.0 },
+            'EUR_CHF': { basePrice: 0.9435, volatility: 0.0014, drift: 0.0 },
+            'EUR_GBP': { basePrice: 0.8575, volatility: 0.0015, drift: 0.0 },
+            'EUR_JPY': { basePrice: 162.650, volatility: 0.007, drift: 0.0, meanReversionSpeed: 0.01 },
+            'EUR_USD': { basePrice: 1.0855, volatility: 0.0016, drift: 0.0 },
+            'GBP_CAD': { basePrice: 1.7150, volatility: 0.0018, drift: 0.0 },
+            'GBP_CHF': { basePrice: 1.1020, volatility: 0.0017, drift: 0.0 },
+            'GBP_USD': { basePrice: 1.2655, volatility: 0.0017, drift: 0.0 },
             
-            // УЛУЧШЕНИЕ: Криптовалюты - увеличенная волатильность и ослабленный mean reversion
+            // Cryptocurrencies - увеличенная волатильность и ослабленный mean reversion для более свободного движения
             'BTC': { basePrice: 68500, volatility: 0.012, drift: 0.0, meanReversionSpeed: 0.002 },
             'BTC_OTC': { basePrice: 68750, volatility: 0.012, drift: 0.0, meanReversionSpeed: 0.002 },
+            'BTC_ETF_OTC': { basePrice: 68600, volatility: 0.012, drift: 0.0, meanReversionSpeed: 0.002 },
             'ETH_OTC': { basePrice: 3450, volatility: 0.014, drift: 0.0, meanReversionSpeed: 0.002 },
-
-        // Настройки для разных символов с уникальными паттернами
-        
+            'TEST_TEST1': { basePrice: 125.50, volatility: 0.0035, drift: 0.0, meanReversionSpeed: 0.003 },
             'BNB_OTC': { basePrice: 585, volatility: 0.013, drift: 0.0, meanReversionSpeed: 0.002 },
             'SOL_OTC': { basePrice: 168, volatility: 0.015, drift: 0.0, meanReversionSpeed: 0.002 },
             'ADA_OTC': { basePrice: 0.58, volatility: 0.0036, drift: 0.0, meanReversionSpeed: 0.003 },
             'DOGE_OTC': { basePrice: 0.14, volatility: 0.0040, drift: 0.0, meanReversionSpeed: 0.003 },
-
+            'DOT_OTC': { basePrice: 7.2, volatility: 0.0034, drift: 0.0, meanReversionSpeed: 0.003 },
+            'MATIC_OTC': { basePrice: 0.78, volatility: 0.0037, drift: 0.0, meanReversionSpeed: 0.003 },
+            'LTC_OTC': { basePrice: 85, volatility: 0.013, drift: 0.0, meanReversionSpeed: 0.002 },
+            'LINK_OTC': { basePrice: 15.8, volatility: 0.0034, drift: 0.0, meanReversionSpeed: 0.003 },
+            'AVAX_OTC': { basePrice: 38.5, volatility: 0.0039, drift: 0.0, meanReversionSpeed: 0.003 },
+            'TRX_OTC': { basePrice: 0.168, volatility: 0.0032, drift: 0.0, meanReversionSpeed: 0.003 },
+            'TON_OTC': { basePrice: 5.6, volatility: 0.0036, drift: 0.0, meanReversionSpeed: 0.003 },
             
-            // Commodities
+            // Commodities - оптимизированная волатильность
             'GOLD_OTC': { basePrice: 2650, volatility: 0.008, drift: 0.0, meanReversionSpeed: 0.01 },
-            'SILVER_OTC': { basePrice: 31.5, volatility: 0.0022, drift: 0.0 }
-
+            'SILVER_OTC': { basePrice: 31.5, volatility: 0.0022, drift: 0.0 },
+            'BRENT_OTC': { basePrice: 87.5, volatility: 0.010, drift: 0.0, meanReversionSpeed: 0.01 },
+            'WTI_OTC': { basePrice: 83.8, volatility: 0.010, drift: 0.0, meanReversionSpeed: 0.01 },
+            'NATGAS_OTC': { basePrice: 3.2, volatility: 0.0028, drift: 0.0 },
+            'PALLADIUM_OTC': { basePrice: 1050, volatility: 0.009, drift: 0.0, meanReversionSpeed: 0.01 },
+            'PLATINUM_OTC': { basePrice: 980, volatility: 0.009, drift: 0.0, meanReversionSpeed: 0.01 }
         };
         
         const symbolConfig = config[symbol] || { basePrice: 100, volatility: 0.002, drift: 0.0 };
@@ -621,22 +476,22 @@ function getGenerator(symbol) {
             symbolConfig.basePrice,
             symbolConfig.volatility,
             symbolConfig.drift,
-
-            symbolConfig.meanReversionSpeed
+            symbolConfig.meanReversionSpeed // если не указан, будет использован дефолтный 0.05
         );
         
-        // Сразу генерируем исторические данные
+        // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Сразу генерируем исторические данные
+        // Это гарантирует что генератор инициализирован ДО первых тиков
         generator.generateHistoricalData();
-        console.log(`Generator created for ${symbol} with ${generator.candles.length} candles`);
-
+        
+        logger.info('generator', 'New generator created and initialized', {
+            symbol: symbol,
+            candleCount: generator.candles.length,
+            basePrice: symbolConfig.basePrice
+        });
         
         generators.set(symbol, generator);
     }
     return generators.get(symbol);
 }
-
-
-// УЛУЧШЕНИЕ: Экспортируем generators для очистки неактивных
-
 
 module.exports = { ChartGenerator, getGenerator, generators };
