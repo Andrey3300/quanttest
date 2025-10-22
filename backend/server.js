@@ -274,6 +274,7 @@ wss.on('connection', (ws, req) => {
         // Отписываемся от предыдущего символа
         if (currentSymbol && subscriptions.has(currentSymbol)) {
           subscriptions.get(currentSymbol).delete(ws);
+          console.log(`Client unsubscribed from ${currentSymbol} (auto)`);
         }
         
         // Подписываемся на новый символ
@@ -290,6 +291,24 @@ wss.on('connection', (ws, req) => {
           type: 'subscribed',
           symbol
         }));
+      } else if (data.type === 'unsubscribe') {
+        // УЛУЧШЕНИЕ: Явная обработка unsubscribe
+        const symbol = data.symbol;
+        
+        if (symbol && subscriptions.has(symbol)) {
+          subscriptions.get(symbol).delete(ws);
+          console.log(`Client explicitly unsubscribed from ${symbol}`);
+          
+          // Отправляем подтверждение
+          ws.send(JSON.stringify({
+            type: 'unsubscribed',
+            symbol
+          }));
+        }
+        
+        if (currentSymbol === symbol) {
+          currentSymbol = null;
+        }
       }
     } catch (error) {
       console.error('WebSocket message error:', error);
@@ -331,6 +350,35 @@ setInterval(() => {
     }
   });
 }, 5000); // каждые 5 секунд
+
+// КРИТИЧЕСКОЕ УЛУЧШЕНИЕ: Автоматическая очистка неактивных генераторов
+// Предотвращает утечки памяти, удаляя генераторы без подписчиков каждые 5 минут
+const chartGeneratorModule = require('./chartGenerator');
+setInterval(() => {
+  const generators = chartGeneratorModule.generators;
+  
+  if (generators && generators.size > 0) {
+    const inactiveSymbols = [];
+    
+    generators.forEach((generator, symbol) => {
+      const hasSubscribers = subscriptions.has(symbol) && subscriptions.get(symbol).size > 0;
+      
+      if (!hasSubscribers) {
+        inactiveSymbols.push(symbol);
+      }
+    });
+    
+    // Удаляем неактивные генераторы
+    inactiveSymbols.forEach(symbol => {
+      generators.delete(symbol);
+      console.log(`✓ Cleaned up inactive generator for ${symbol}`);
+    });
+    
+    if (inactiveSymbols.length > 0) {
+      console.log(`Inactive generators cleaned: ${inactiveSymbols.length}, remaining: ${generators.size}`);
+    }
+  }
+}, 5 * 60 * 1000); // каждые 5 минут
 
 server.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);

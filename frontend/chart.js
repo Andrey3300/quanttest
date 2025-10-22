@@ -121,13 +121,36 @@ class ChartManager {
         }
     }
 
-    // Подключение к WebSocket
+    // КРИТИЧЕСКОЕ УЛУЧШЕНИЕ: Подключение к WebSocket с переиспользованием соединения
     connectWebSocket(symbol) {
         const wsUrl = window.location.origin.includes('localhost')
             ? 'ws://localhost:3001/ws/chart'
             : `ws://${window.location.host}/ws/chart`;
 
         try {
+            // РЕШЕНИЕ ПРОБЛЕМЫ WebSocket: Переиспользуем одно соединение
+            // Если соединение уже есть и оно активно, просто меняем подписку
+            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                console.log('Reusing existing WebSocket connection');
+                
+                // Явный unsubscribe от старого символа
+                if (this.symbol && this.symbol !== symbol) {
+                    this.ws.send(JSON.stringify({
+                        type: 'unsubscribe',
+                        symbol: this.symbol
+                    }));
+                }
+                
+                // Подписываемся на новый символ
+                this.symbol = symbol;
+                this.ws.send(JSON.stringify({
+                    type: 'subscribe',
+                    symbol: symbol
+                }));
+                return;
+            }
+            
+            // Иначе создаем новое соединение
             this.ws = new WebSocket(wsUrl);
 
             this.ws.onopen = () => {
@@ -145,6 +168,8 @@ class ChartManager {
 
                     if (message.type === 'subscribed') {
                         console.log(`Subscribed to ${message.symbol}`);
+                    } else if (message.type === 'unsubscribed') {
+                        console.log(`Unsubscribed from ${message.symbol}`);
                     } else if (message.type === 'candle') {
                         // Обновляем или добавляем новую свечу
                         this.updateCandle(message.data);
@@ -209,20 +234,25 @@ class ChartManager {
         }
     }
 
-    // Смена символа
+    // УЛУЧШЕНИЕ: Смена символа с переиспользованием WebSocket
     async changeSymbol(newSymbol) {
-        this.symbol = newSymbol;
+        console.log(`Changing symbol from ${this.symbol} to ${newSymbol}`);
         
-        // Закрываем старое WebSocket соединение
-        if (this.ws) {
-            this.ws.close();
+        // Очищаем график
+        if (this.candleSeries) {
+            this.candleSeries.setData([]);
+        }
+        if (this.volumeSeries) {
+            this.volumeSeries.setData([]);
         }
 
         // Загружаем новые данные
         await this.loadHistoricalData(newSymbol);
 
-        // Подключаемся к новому WebSocket
+        // Переиспользуем WebSocket соединение (если есть) или создаем новое
         this.connectWebSocket(newSymbol);
+        
+        console.log(`✓ Chart switched to ${newSymbol}`);
     }
 
     // Очистка ресурсов
