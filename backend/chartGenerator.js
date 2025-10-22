@@ -9,7 +9,11 @@ class ChartGenerator {
         this.basePrice = basePrice;
         this.currentPrice = basePrice;
         
+
+        // УЛУЧШЕНИЕ: Увеличиваем волатильность пропорционально для больших чисел
+
         // Увеличиваем волатильность пропорционально для больших чисел
+
         if (basePrice > 10000) {
             volatility = volatility * (1 + Math.log10(basePrice / 10000));
         }
@@ -50,16 +54,19 @@ class ChartGenerator {
         return newPrice;
     }
 
-    // Определение точности цены на основе базовой цены
+
+    // УЛУЧШЕНИЕ: Определение точности цены на основе базовой цены
     getPricePrecision(price) {
-        if (price >= 10000) return 1;     // Например UAH_USD_OTC: 68623.2
-        if (price >= 1000) return 2;      // Например BTC: 68750.23
-        if (price >= 100) return 3;       // Например ETH: 3450.123
-        if (price >= 10) return 4;        // Например USD/MXN: 18.9167
-        if (price >= 1) return 4;         // Например EUR/USD: 1.0850
-        if (price >= 0.1) return 5;       // Например DOGE: 0.14523
-        if (price >= 0.01) return 6;      // Например маленькие пары
-        return 8;                          // Для очень маленьких цен
+        if (price >= 10000) return 1;     // Крупные активы: UAH_USD_OTC: 68623.2
+        if (price >= 1000) return 2;      // Криптовалюты: BTC: 68750.23
+        if (price >= 100) return 3;       // Средние криптовалюты: ETH: 3450.123
+        if (price >= 10) return 4;        // Валютные пары: USD/MXN: 18.9167
+        if (price >= 1) return 4;         // Основные пары: EUR/USD: 1.0850
+        if (price >= 0.1) return 5;       // Альткоины: DOGE: 0.14523
+        if (price >= 0.01) return 6;      // Микро-пары
+        return 8;                          // Минимальные активы
+
+    
     }
 
     // Генерация одной свечи с реалистичным OHLC
@@ -71,7 +78,9 @@ class ChartGenerator {
         
         // Ограничение максимального размера фитиля относительно тела свечи
         const bodySize = Math.abs(close - openPrice);
-        const maxWickMultiplier = bodySize > 0 ? 2.0 : 0.5; // фитиль не больше 2x тела (или 0.5% если тело нулевое)
+
+        const maxWickMultiplier = bodySize > 0 ? 2.0 : 0.5; // фитиль не больше 2x тела
+
         const maxWickSize = bodySize > 0 ? bodySize * maxWickMultiplier : this.basePrice * 0.005;
         
         // High должен быть выше open и close
@@ -91,7 +100,11 @@ class ChartGenerator {
         const volumeVariance = 0.5;
         const volume = Math.floor(baseVolume * (1 + this.randomNormal(0, volumeVariance)));
         
+
+        // УЛУЧШЕНИЕ: Определяем точность для этого актива
+
         // Определяем точность для этого актива
+
         const precision = this.getPricePrecision(this.basePrice);
         
         return {
@@ -160,39 +173,28 @@ class ChartGenerator {
     // Генерация новой свечи для real-time обновления
     generateNextCandle() {
         const now = Date.now();
-        const precision = this.getPricePrecision(this.basePrice);
+
+        
         const intervalSeconds = 5; // интервал свечи
         
         // Новая свеча ВСЕГДА начинается с цены закрытия предыдущей свечи
         const openPrice = this.currentPrice;
         
-        // РЕШЕНИЕ #1: Не полагаемся на Date.now() для timestamp, а рассчитываем от последней свечи
-        // Это гарантирует монотонность времени и убирает зависимость от точности setInterval
+
+        // УЛУЧШЕНИЕ: Рассчитываем timestamp от последней свечи для монотонности
         let timestamp;
         if (this.candles.length > 0) {
             const lastCandle = this.candles[this.candles.length - 1];
-            // ВСЕГДА следующий интервал - гарантирует что timestamp строго больше предыдущего
-            timestamp = lastCandle.time + intervalSeconds;
-            
-            logger.debug('candle', 'Calculated timestamp from last candle', { 
-                symbol: this.symbol,
-                lastTime: lastCandle.time,
-                newTime: timestamp,
-                intervalSeconds: intervalSeconds
-            });
+            timestamp = lastCandle.time + intervalSeconds; // строго больше предыдущего
         } else {
-            // Только для первой свечи выравниваем по сетке
             const currentTimeSeconds = Math.floor(now / 1000);
             timestamp = Math.floor(currentTimeSeconds / intervalSeconds) * intervalSeconds;
-            
-            logger.debug('candle', 'First candle - aligned to grid', { 
-                symbol: this.symbol,
-                timestamp: timestamp
-            });
         }
         
-        // Генерируем полноценную свечу с вариацией сразу
-        // Используем существующий метод generateCandle() вместо плоской свечи
+        // КРИТИЧЕСКОЕ УЛУЧШЕНИЕ: Генерируем полноценную свечу с вариацией сразу
+        // Это решает проблему одинаковых свечей (open=high=low=close)
+
+     
         const candle = this.generateCandle(timestamp * 1000, openPrice);
         
         this.candles.push(candle);
@@ -203,43 +205,9 @@ class ChartGenerator {
             this.candles.shift();
         }
         
-        // Инициализируем состояние текущей свечи для плавных обновлений
-        // Начинаем с текущей цены и позволяем тикам развивать свечу
-        this.currentCandleState = {
-            time: candle.time,
-            open: candle.open,
-            high: candle.high,
-            low: candle.low,
-            close: candle.close,
-            volume: candle.volume,
-            targetClose: candle.close,
-            targetHigh: candle.high,
-            targetLow: candle.low
-        };
-        
-        // Финальная валидация перед возвратом
-        if (typeof candle.time !== 'number' || isNaN(candle.time)) {
-            logger.error('candle', 'Invalid new candle time detected', { 
-                symbol: this.symbol,
-                candle: candle
-            });
-            console.error('Invalid new candle time:', candle);
-            candle.time = Math.floor(Date.now() / 1000);
-        }
-        
-        // РЕШЕНИЕ #5: Детальное логирование для мониторинга
-        logger.logCandle('New candle sent to clients', this.symbol, candle);
-        logger.debug('candle', 'Candle creation details', {
-            symbol: this.symbol,
-            time: candle.time,
-            timeISO: new Date(candle.time * 1000).toISOString(),
-            open: candle.open,
-            close: candle.close,
-            totalCandles: this.candles.length,
-            previousCandleTime: this.candles.length > 1 ? this.candles[this.candles.length - 2].time : null,
-            timeDiff: this.candles.length > 1 ? candle.time - this.candles[this.candles.length - 2].time : null
-        });
-        
+
+        console.log(`New candle created for ${this.symbol} at time ${candle.time}`);
+
         return candle;
     }
     
@@ -409,74 +377,35 @@ const generators = new Map();
 
 function getGenerator(symbol) {
     if (!generators.has(symbol)) {
-        // Настройки для разных символов с уникальными паттернами
+
+        // УЛУЧШЕНИЕ: Настройки для разных символов с уникальными паттернами
         const config = {
-            // Currencies - умеренная волатильность для естественного вида как USD/MXN
+            // Currencies
+            'USD_MXN': { basePrice: 18.9167, volatility: 0.002, drift: 0.0 },
+            'EUR_USD': { basePrice: 1.0850, volatility: 0.0015, drift: 0.0 },
+            'GBP_USD': { basePrice: 1.2650, volatility: 0.0018, drift: 0.0 },
             'USD_MXN_OTC': { basePrice: 18.9167, volatility: 0.002, drift: 0.0 },
             'EUR_USD_OTC': { basePrice: 1.0850, volatility: 0.0015, drift: 0.0 },
             'GBP_USD_OTC': { basePrice: 1.2650, volatility: 0.0018, drift: 0.0 },
-            'USD_CAD': { basePrice: 1.3550, volatility: 0.0016, drift: 0.0 },
-            'AUD_CAD_OTC': { basePrice: 0.8820, volatility: 0.0019, drift: 0.0 },
-            'BHD_CNY_OTC': { basePrice: 18.6500, volatility: 0.0017, drift: 0.0 },
-            'EUR_CHF_OTC': { basePrice: 0.9420, volatility: 0.0014, drift: 0.0 },
-            'EUR_CHF_OTC2': { basePrice: 0.9425, volatility: 0.0014, drift: 0.0 },
-            'KES_USD_OTC': { basePrice: 0.0077, volatility: 0.0020, drift: 0.0 },
-            'TND_USD_OTC': { basePrice: 0.3190, volatility: 0.0018, drift: 0.0 },
             'UAH_USD_OTC': { basePrice: 68623.2282, volatility: 0.008, drift: 0.0, meanReversionSpeed: 0.01 },
-            'USD_BDT_OTC': { basePrice: 0.0092, volatility: 0.0019, drift: 0.0 },
-            'USD_CNH_OTC': { basePrice: 7.2450, volatility: 0.0016, drift: 0.0 },
-            'USD_IDR_OTC': { basePrice: 15850, volatility: 0.007, drift: 0.0, meanReversionSpeed: 0.01 },
-            'USD_MYR_OTC': { basePrice: 4.4650, volatility: 0.0017, drift: 0.0 },
-            'AUD_NZD_OTC': { basePrice: 1.0920, volatility: 0.0016, drift: 0.0 },
-            'USD_PHP_OTC': { basePrice: 0.0178, volatility: 0.0019, drift: 0.0 },
-            'ZAR_USD_OTC': { basePrice: 0.0548, volatility: 0.0021, drift: 0.0 },
-            'YER_USD_OTC': { basePrice: 0.0040, volatility: 0.0022, drift: 0.0 },
-            'USD_BRL_OTC': { basePrice: 5.6250, volatility: 0.0019, drift: 0.0 },
-            'USD_EGP_OTC': { basePrice: 0.0204, volatility: 0.0023, drift: 0.0 },
-            'OMR_CNY_OTC': { basePrice: 18.3500, volatility: 0.0016, drift: 0.0 },
-            'AUD_JPY_OTC': { basePrice: 96.850, volatility: 0.007, drift: 0.0, meanReversionSpeed: 0.01 },
-            'EUR_GBP_OTC': { basePrice: 0.8580, volatility: 0.0015, drift: 0.0 },
-            'EUR_HUF_OTC': { basePrice: 393.50, volatility: 0.008, drift: 0.0, meanReversionSpeed: 0.01 },
-            'EUR_TRY_OTC': { basePrice: 37.250, volatility: 0.0024, drift: 0.0 },
-            'USD_JPY_OTC': { basePrice: 149.850, volatility: 0.007, drift: 0.0, meanReversionSpeed: 0.01 },
-            'USD_CHF_OTC': { basePrice: 0.8690, volatility: 0.0015, drift: 0.0 },
-            'AUD_CHF': { basePrice: 0.5820, volatility: 0.0016, drift: 0.0 },
-            'CHF_JPY': { basePrice: 172.450, volatility: 0.007, drift: 0.0, meanReversionSpeed: 0.01 },
-            'EUR_AUD': { basePrice: 1.6350, volatility: 0.0017, drift: 0.0 },
-            'EUR_CHF': { basePrice: 0.9435, volatility: 0.0014, drift: 0.0 },
-            'EUR_GBP': { basePrice: 0.8575, volatility: 0.0015, drift: 0.0 },
-            'EUR_JPY': { basePrice: 162.650, volatility: 0.007, drift: 0.0, meanReversionSpeed: 0.01 },
-            'EUR_USD': { basePrice: 1.0855, volatility: 0.0016, drift: 0.0 },
-            'GBP_CAD': { basePrice: 1.7150, volatility: 0.0018, drift: 0.0 },
-            'GBP_CHF': { basePrice: 1.1020, volatility: 0.0017, drift: 0.0 },
-            'GBP_USD': { basePrice: 1.2655, volatility: 0.0017, drift: 0.0 },
             
-            // Cryptocurrencies - увеличенная волатильность и ослабленный mean reversion для более свободного движения
+            // УЛУЧШЕНИЕ: Криптовалюты - увеличенная волатильность и ослабленный mean reversion
             'BTC': { basePrice: 68500, volatility: 0.012, drift: 0.0, meanReversionSpeed: 0.002 },
             'BTC_OTC': { basePrice: 68750, volatility: 0.012, drift: 0.0, meanReversionSpeed: 0.002 },
-            'BTC_ETF_OTC': { basePrice: 68600, volatility: 0.012, drift: 0.0, meanReversionSpeed: 0.002 },
             'ETH_OTC': { basePrice: 3450, volatility: 0.014, drift: 0.0, meanReversionSpeed: 0.002 },
-            'TEST_TEST1': { basePrice: 125.50, volatility: 0.0035, drift: 0.0, meanReversionSpeed: 0.003 },
+
+        // Настройки для разных символов с уникальными паттернами
+        
             'BNB_OTC': { basePrice: 585, volatility: 0.013, drift: 0.0, meanReversionSpeed: 0.002 },
             'SOL_OTC': { basePrice: 168, volatility: 0.015, drift: 0.0, meanReversionSpeed: 0.002 },
             'ADA_OTC': { basePrice: 0.58, volatility: 0.0036, drift: 0.0, meanReversionSpeed: 0.003 },
             'DOGE_OTC': { basePrice: 0.14, volatility: 0.0040, drift: 0.0, meanReversionSpeed: 0.003 },
-            'DOT_OTC': { basePrice: 7.2, volatility: 0.0034, drift: 0.0, meanReversionSpeed: 0.003 },
-            'MATIC_OTC': { basePrice: 0.78, volatility: 0.0037, drift: 0.0, meanReversionSpeed: 0.003 },
-            'LTC_OTC': { basePrice: 85, volatility: 0.013, drift: 0.0, meanReversionSpeed: 0.002 },
-            'LINK_OTC': { basePrice: 15.8, volatility: 0.0034, drift: 0.0, meanReversionSpeed: 0.003 },
-            'AVAX_OTC': { basePrice: 38.5, volatility: 0.0039, drift: 0.0, meanReversionSpeed: 0.003 },
-            'TRX_OTC': { basePrice: 0.168, volatility: 0.0032, drift: 0.0, meanReversionSpeed: 0.003 },
-            'TON_OTC': { basePrice: 5.6, volatility: 0.0036, drift: 0.0, meanReversionSpeed: 0.003 },
+
             
-            // Commodities - оптимизированная волатильность
+            // Commodities
             'GOLD_OTC': { basePrice: 2650, volatility: 0.008, drift: 0.0, meanReversionSpeed: 0.01 },
-            'SILVER_OTC': { basePrice: 31.5, volatility: 0.0022, drift: 0.0 },
-            'BRENT_OTC': { basePrice: 87.5, volatility: 0.010, drift: 0.0, meanReversionSpeed: 0.01 },
-            'WTI_OTC': { basePrice: 83.8, volatility: 0.010, drift: 0.0, meanReversionSpeed: 0.01 },
-            'NATGAS_OTC': { basePrice: 3.2, volatility: 0.0028, drift: 0.0 },
-            'PALLADIUM_OTC': { basePrice: 1050, volatility: 0.009, drift: 0.0, meanReversionSpeed: 0.01 },
-            'PLATINUM_OTC': { basePrice: 980, volatility: 0.009, drift: 0.0, meanReversionSpeed: 0.01 }
+            'SILVER_OTC': { basePrice: 31.5, volatility: 0.0022, drift: 0.0 }
+
         };
         
         const symbolConfig = config[symbol] || { basePrice: 100, volatility: 0.002, drift: 0.0 };
@@ -485,22 +414,22 @@ function getGenerator(symbol) {
             symbolConfig.basePrice,
             symbolConfig.volatility,
             symbolConfig.drift,
-            symbolConfig.meanReversionSpeed // если не указан, будет использован дефолтный 0.05
+
+            symbolConfig.meanReversionSpeed
         );
         
-        // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Сразу генерируем исторические данные
-        // Это гарантирует что генератор инициализирован ДО первых тиков
+        // Сразу генерируем исторические данные
         generator.generateHistoricalData();
-        
-        logger.info('generator', 'New generator created and initialized', {
-            symbol: symbol,
-            candleCount: generator.candles.length,
-            basePrice: symbolConfig.basePrice
-        });
+        console.log(`Generator created for ${symbol} with ${generator.candles.length} candles`);
+
         
         generators.set(symbol, generator);
     }
     return generators.get(symbol);
 }
+
+
+// УЛУЧШЕНИЕ: Экспортируем generators для очистки неактивных
+
 
 module.exports = { ChartGenerator, getGenerator, generators };

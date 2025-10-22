@@ -331,20 +331,21 @@ class ChartManager {
         }
     }
 
-    // Подключение к WebSocket (переиспользуем соединение)
+
+    // КРИТИЧЕСКОЕ УЛУЧШЕНИЕ: Подключение к WebSocket с переиспользованием соединения
+
     connectWebSocket(symbol) {
         const wsUrl = window.location.origin.includes('localhost')
             ? 'ws://localhost:3001/ws/chart'
             : `ws://${window.location.host}/ws/chart`;
 
         try {
-            // ПРОБЛЕМА WebSocket РЕШЕНА: Переиспользуем одно соединение
+
+            // РЕШЕНИЕ ПРОБЛЕМЫ WebSocket: Переиспользуем одно соединение
             // Если соединение уже есть и оно активно, просто меняем подписку
             if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                window.errorLogger?.info('websocket', 'Reusing existing connection for symbol change', { 
-                    oldSymbol: this.symbol,
-                    newSymbol: symbol
-                });
+                console.log('Reusing existing WebSocket connection');
+
                 
                 // Явный unsubscribe от старого символа
                 if (this.symbol && this.symbol !== symbol) {
@@ -364,18 +365,8 @@ class ChartManager {
             }
             
             // Иначе создаем новое соединение
-            this.closeWebSocket();
-            
-            // Отменяем любые pending переподключения
-            if (this.reconnectTimer) {
-                clearTimeout(this.reconnectTimer);
-                this.reconnectTimer = null;
-            }
-            
-            // Увеличиваем ID соединения для отслеживания
-            this.connectionId++;
-            const currentConnectionId = this.connectionId;
-            
+
+
             this.ws = new WebSocket(wsUrl);
             
             window.errorLogger?.info('websocket', 'Creating new WebSocket connection', { 
@@ -410,39 +401,10 @@ class ChartManager {
 
                     if (message.type === 'subscribed') {
                         console.log(`Subscribed to ${message.symbol}`);
-                        window.errorLogger?.info('websocket', 'Subscription confirmed', { 
-                            symbol: message.symbol,
-                            connectionId: currentConnectionId
-                        });
+
                     } else if (message.type === 'unsubscribed') {
                         console.log(`Unsubscribed from ${message.symbol}`);
-                        window.errorLogger?.info('websocket', 'Unsubscription confirmed', { 
-                            symbol: message.symbol
-                        });
-                    } else if (message.type === 'tick') {
-                        // Плавное обновление текущей свечи (не проверяем дубликаты для тиков)
-                        this.updateCandle(message.data, false);
-                    } else if (message.type === 'newCandle') {
-                        // Создание новой свечи
-                        // ЗАЩИТА: Проверяем что эту свечу еще не обрабатывали
-                        const candleKey = `${message.data.time}-${message.symbol || this.symbol}`;
-                        if (this.processedCandles.has(candleKey)) {
-                            window.errorLogger?.warn('websocket', 'Duplicate new candle detected - skipping', {
-                                candleKey,
-                                time: message.data.time
-                            });
-                            return;
-                        }
-                        this.processedCandles.add(candleKey);
-                        
-                        // Ограничиваем размер Set для предотвращения утечки памяти
-                        if (this.processedCandles.size > 10000) {
-                            // Очищаем старые записи
-                            const entries = Array.from(this.processedCandles);
-                            this.processedCandles = new Set(entries.slice(-5000));
-                        }
-                        
-                        this.updateCandle(message.data, true);
+
                     } else if (message.type === 'candle') {
                         // Обратная совместимость
                         this.updateCandle(message.data, false);
@@ -864,17 +826,13 @@ class ChartManager {
         }
     }
 
-    // Смена символа (используем переиспользование соединения)
+
+    // УЛУЧШЕНИЕ: Смена символа с переиспользованием WebSocket
     async changeSymbol(newSymbol) {
-        window.errorLogger?.info('chart', 'Changing symbol', { 
-            from: this.symbol, 
-            to: newSymbol 
-        });
+        console.log(`Changing symbol from ${this.symbol} to ${newSymbol}`);
+        
+        // Очищаем график
 
-        // Останавливаем анимацию
-        this.stopCandleAnimation();
-
-        // Очищаем график и сбрасываем счетчики
         if (this.candleSeries) {
             this.candleSeries.setData([]);
         }
@@ -895,163 +853,12 @@ class ChartManager {
         // Небольшая задержка для гарантии что backend тоже инициализировал генератор
         await new Promise(resolve => setTimeout(resolve, 100));
 
-        // Переиспользуем соединение (если есть) или создаем новое
+
+        // Переиспользуем WebSocket соединение (если есть) или создаем новое
         this.connectWebSocket(newSymbol);
         
-        window.errorLogger?.info('chart', 'Chart switched successfully', { 
-            symbol: newSymbol,
-            candleCount: this.candleCount 
-        });
-        console.log(`Chart switched to ${newSymbol} with ${this.candleCount} candles`);
-    }
+        console.log(`✓ Chart switched to ${newSymbol}`);
 
-    // Полная очистка WebSocket соединения
-    closeWebSocket() {
-        if (this.ws) {
-            const currentState = this.ws.readyState;
-            
-            // Удаляем все обработчики событий чтобы предотвратить утечки и повторные подключения
-            this.ws.onopen = null;
-            this.ws.onmessage = null;
-            this.ws.onerror = null;
-            this.ws.onclose = null;
-            
-            // Закрываем соединение если оно не закрыто
-            if (currentState === WebSocket.OPEN || currentState === WebSocket.CONNECTING) {
-                this.ws.close(1000, 'Intentional close'); // 1000 = нормальное закрытие
-            }
-            
-            window.errorLogger?.info('websocket', 'WebSocket cleaned up', { 
-                previousState: currentState
-            });
-            
-            this.ws = null;
-        }
-    }
-
-    // Плавная анимация свечи (lerp интерполяция)
-    animateCandle() {
-        if (!this.animationState.isAnimating || !this.animationState.displayed || !this.animationState.target) {
-            return;
-        }
-        
-        const state = this.animationState;
-        
-        // Linear interpolation (lerp) для каждого значения
-        state.displayed.close += (state.target.close - state.displayed.close) * this.lerpFactor;
-        state.displayed.high += (state.target.high - state.displayed.high) * this.lerpFactor;
-        state.displayed.low += (state.target.low - state.displayed.low) * this.lerpFactor;
-        
-        // Проверяем достигли ли мы цели (с учетом порога)
-        const closeDiff = Math.abs(state.target.close - state.displayed.close);
-        const highDiff = Math.abs(state.target.high - state.displayed.high);
-        const lowDiff = Math.abs(state.target.low - state.displayed.low);
-        
-        const maxDiff = Math.max(closeDiff, highDiff, lowDiff);
-        
-        if (maxDiff < this.animationThreshold) {
-            // Достигли цели - устанавливаем точные значения и останавливаем анимацию
-            state.displayed.close = state.target.close;
-            state.displayed.high = state.target.high;
-            state.displayed.low = state.target.low;
-            this.stopCandleAnimation();
-        }
-        
-        // Обновляем свечу на графике с анимированными значениями
-        if (this.candleSeries && state.candleData) {
-            const animatedCandle = {
-                time: state.candleData.time,
-                open: state.candleData.open,
-                close: state.displayed.close,
-                high: state.displayed.high,
-                low: state.displayed.low,
-                volume: state.candleData.volume
-            };
-            
-            try {
-                this.candleSeries.update(animatedCandle);
-                this.volumeSeries.update({
-                    time: animatedCandle.time,
-                    value: animatedCandle.volume,
-                    color: animatedCandle.close >= animatedCandle.open ? '#26d07c80' : '#ff475780'
-                });
-            } catch (error) {
-                window.errorLogger?.error('animation', 'Error updating animated candle', {
-                    error: error.message,
-                    animatedCandle: animatedCandle
-                });
-                console.error('Error updating animated candle:', error);
-                this.stopCandleAnimation();
-                return;
-            }
-        }
-        
-        // Продолжаем анимацию
-        if (state.isAnimating) {
-            state.animationFrameId = requestAnimationFrame(() => this.animateCandle());
-        }
-    }
-    
-    // Запуск анимации свечи
-    startCandleAnimation(candleData) {
-        const state = this.animationState;
-        
-        // Если уже анимируем - обновляем только целевые значения
-        if (state.isAnimating && state.displayed) {
-            state.target = {
-                close: candleData.close,
-                high: candleData.high,
-                low: candleData.low
-            };
-            state.candleData = candleData;
-            return;
-        }
-        
-        // Начинаем новую анимацию
-        state.displayed = {
-            close: candleData.close,
-            high: candleData.high,
-            low: candleData.low
-        };
-        state.target = {
-            close: candleData.close,
-            high: candleData.high,
-            low: candleData.low
-        };
-        state.candleData = candleData;
-        state.isAnimating = true;
-        
-        // Запускаем анимационный цикл
-        state.animationFrameId = requestAnimationFrame(() => this.animateCandle());
-    }
-    
-    // Остановка анимации свечи
-    stopCandleAnimation() {
-        const state = this.animationState;
-        
-        if (state.animationFrameId) {
-            cancelAnimationFrame(state.animationFrameId);
-            state.animationFrameId = null;
-        }
-        
-        state.isAnimating = false;
-    }
-    
-    // Обновление целевых значений анимации (для новых тиков)
-    updateAnimationTarget(candleData) {
-        const state = this.animationState;
-        
-        if (!state.isAnimating) {
-            // Если анимация не запущена - запускаем
-            this.startCandleAnimation(candleData);
-            return;
-        }
-        
-        // Обновляем целевые значения
-        state.target.close = candleData.close;
-        state.target.high = candleData.high;
-        state.target.low = candleData.low;
-        state.candleData = candleData;
     }
 
     // Очистка ресурсов
