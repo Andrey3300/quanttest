@@ -8,6 +8,12 @@ class ChartGenerator {
         this.symbol = symbol;
         this.basePrice = basePrice;
         this.currentPrice = basePrice;
+        
+        // Увеличиваем волатильность пропорционально для больших чисел
+        if (basePrice > 10000) {
+            volatility = volatility * (1 + Math.log10(basePrice / 10000));
+        }
+        
         this.volatility = volatility; // волатильность
         this.drift = drift; // тренд
         this.meanReversionSpeed = meanReversionSpeed; // скорость возврата к средней
@@ -46,6 +52,7 @@ class ChartGenerator {
 
     // Определение точности цены на основе базовой цены
     getPricePrecision(price) {
+        if (price >= 10000) return 1;     // Например UAH_USD_OTC: 68623.2
         if (price >= 1000) return 2;      // Например BTC: 68750.23
         if (price >= 100) return 3;       // Например ETH: 3450.123
         if (price >= 10) return 4;        // Например USD/MXN: 18.9167
@@ -175,16 +182,9 @@ class ChartGenerator {
             });
         }
         
-        // Создаем начальную свечу где open = high = low = close
-        // Это гарантирует правильное отображение и continuity между свечами
-        const candle = {
-            time: timestamp,
-            open: parseFloat(openPrice.toFixed(precision)),
-            high: parseFloat(openPrice.toFixed(precision)),
-            low: parseFloat(openPrice.toFixed(precision)),
-            close: parseFloat(openPrice.toFixed(precision)),
-            volume: 1000
-        };
+        // Генерируем полноценную свечу с вариацией сразу
+        // Используем существующий метод generateCandle() вместо плоской свечи
+        const candle = this.generateCandle(timestamp * 1000, openPrice);
         
         this.candles.push(candle);
         
@@ -442,23 +442,23 @@ function getGenerator(symbol) {
             'GBP_CHF': { basePrice: 1.1020, volatility: 0.0017, drift: 0.0 },
             'GBP_USD': { basePrice: 1.2655, volatility: 0.0017, drift: 0.0 },
             
-            // Cryptocurrencies - увеличенная волатильность и слабый mean reversion
-            'BTC': { basePrice: 68500, volatility: 0.012, drift: 0.0, meanReversionSpeed: 0.005 },
-            'BTC_OTC': { basePrice: 68750, volatility: 0.012, drift: 0.0, meanReversionSpeed: 0.005 },
-            'BTC_ETF_OTC': { basePrice: 68600, volatility: 0.012, drift: 0.0, meanReversionSpeed: 0.005 },
-            'ETH_OTC': { basePrice: 3450, volatility: 0.014, drift: 0.0, meanReversionSpeed: 0.005 },
-            'TEST_TEST1': { basePrice: 125.50, volatility: 0.0035, drift: 0.0 },
-            'BNB_OTC': { basePrice: 585, volatility: 0.013, drift: 0.0, meanReversionSpeed: 0.005 },
-            'SOL_OTC': { basePrice: 168, volatility: 0.015, drift: 0.0, meanReversionSpeed: 0.005 },
-            'ADA_OTC': { basePrice: 0.58, volatility: 0.0036, drift: 0.0 },
-            'DOGE_OTC': { basePrice: 0.14, volatility: 0.0040, drift: 0.0 },
-            'DOT_OTC': { basePrice: 7.2, volatility: 0.0034, drift: 0.0 },
-            'MATIC_OTC': { basePrice: 0.78, volatility: 0.0037, drift: 0.0 },
-            'LTC_OTC': { basePrice: 85, volatility: 0.013, drift: 0.0, meanReversionSpeed: 0.005 },
-            'LINK_OTC': { basePrice: 15.8, volatility: 0.0034, drift: 0.0 },
-            'AVAX_OTC': { basePrice: 38.5, volatility: 0.0039, drift: 0.0 },
-            'TRX_OTC': { basePrice: 0.168, volatility: 0.0032, drift: 0.0 },
-            'TON_OTC': { basePrice: 5.6, volatility: 0.0036, drift: 0.0 },
+            // Cryptocurrencies - увеличенная волатильность и ослабленный mean reversion для более свободного движения
+            'BTC': { basePrice: 68500, volatility: 0.012, drift: 0.0, meanReversionSpeed: 0.002 },
+            'BTC_OTC': { basePrice: 68750, volatility: 0.012, drift: 0.0, meanReversionSpeed: 0.002 },
+            'BTC_ETF_OTC': { basePrice: 68600, volatility: 0.012, drift: 0.0, meanReversionSpeed: 0.002 },
+            'ETH_OTC': { basePrice: 3450, volatility: 0.014, drift: 0.0, meanReversionSpeed: 0.002 },
+            'TEST_TEST1': { basePrice: 125.50, volatility: 0.0035, drift: 0.0, meanReversionSpeed: 0.003 },
+            'BNB_OTC': { basePrice: 585, volatility: 0.013, drift: 0.0, meanReversionSpeed: 0.002 },
+            'SOL_OTC': { basePrice: 168, volatility: 0.015, drift: 0.0, meanReversionSpeed: 0.002 },
+            'ADA_OTC': { basePrice: 0.58, volatility: 0.0036, drift: 0.0, meanReversionSpeed: 0.003 },
+            'DOGE_OTC': { basePrice: 0.14, volatility: 0.0040, drift: 0.0, meanReversionSpeed: 0.003 },
+            'DOT_OTC': { basePrice: 7.2, volatility: 0.0034, drift: 0.0, meanReversionSpeed: 0.003 },
+            'MATIC_OTC': { basePrice: 0.78, volatility: 0.0037, drift: 0.0, meanReversionSpeed: 0.003 },
+            'LTC_OTC': { basePrice: 85, volatility: 0.013, drift: 0.0, meanReversionSpeed: 0.002 },
+            'LINK_OTC': { basePrice: 15.8, volatility: 0.0034, drift: 0.0, meanReversionSpeed: 0.003 },
+            'AVAX_OTC': { basePrice: 38.5, volatility: 0.0039, drift: 0.0, meanReversionSpeed: 0.003 },
+            'TRX_OTC': { basePrice: 0.168, volatility: 0.0032, drift: 0.0, meanReversionSpeed: 0.003 },
+            'TON_OTC': { basePrice: 5.6, volatility: 0.0036, drift: 0.0, meanReversionSpeed: 0.003 },
             
             // Commodities - оптимизированная волатильность
             'GOLD_OTC': { basePrice: 2650, volatility: 0.008, drift: 0.0, meanReversionSpeed: 0.01 },
@@ -494,4 +494,4 @@ function getGenerator(symbol) {
     return generators.get(symbol);
 }
 
-module.exports = { ChartGenerator, getGenerator };
+module.exports = { ChartGenerator, getGenerator, generators };
