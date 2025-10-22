@@ -47,6 +47,10 @@ class ChartManager {
         this.interpolationDuration = 300; // длительность интерполяции (ms) - плавный переход между тиками (замедлено на 50% для реалистичности)
         this.animationFrameId = null; // ID для requestAnimationFrame
         this.lastTickTime = 0; // время последнего тика для расчета интерполяции
+        
+        // Линия экспирации на графике (для отображения таймера экспирации на y-axis)
+        this.expirationPriceLine = null;
+        this.currentPrice = null; // текущая цена для обновления линии экспирации
     }
 
     // Инициализация графика
@@ -357,6 +361,12 @@ class ChartManager {
                 firstTime: data[0]?.time,
                 lastTime: data[data.length - 1]?.time
             });
+            
+            // Сохраняем текущую цену для создания линии экспирации
+            if (data.length > 0) {
+                this.currentPrice = data[data.length - 1].close;
+            }
+            
             this.chart.timeScale().fitContent();
             
             // Устанавливаем начальный видимый диапазон (последние ~100 свечей)
@@ -971,6 +981,113 @@ class ChartManager {
             
             priceEl.dataset.prevPrice = price;
         }
+        
+        // Обновляем текущую цену для линии экспирации
+        this.currentPrice = price;
+        
+        // Обновляем позицию линии экспирации (если она существует)
+        if (this.expirationPriceLine && this.chartType !== 'line') {
+            this.updateExpirationPriceLinePosition(price);
+        }
+    }
+    
+    // Создать линию экспирации на графике
+    createExpirationPriceLine() {
+        // Удаляем старую линию если есть
+        this.removeExpirationPriceLine();
+        
+        const activeSeries = this.getActiveSeries();
+        if (!activeSeries || !this.currentPrice) return;
+        
+        // Создаем новую линию экспирации
+        this.expirationPriceLine = activeSeries.createPriceLine({
+            price: this.currentPrice,
+            color: '#4f9fff',
+            lineWidth: 2,
+            lineStyle: LightweightCharts.LineStyle.Solid,
+            axisLabelVisible: true,
+            title: `${this.timeframe} 00:00`,
+            axisLabelColor: '#4f9fff',
+            axisLabelTextColor: '#ffffff'
+        });
+        
+        window.errorLogger?.info('chart', 'Expiration price line created');
+    }
+    
+    // Удалить линию экспирации
+    removeExpirationPriceLine() {
+        if (this.expirationPriceLine) {
+            const activeSeries = this.getActiveSeries();
+            if (activeSeries) {
+                try {
+                    activeSeries.removePriceLine(this.expirationPriceLine);
+                } catch (error) {
+                    window.errorLogger?.warn('chart', 'Error removing expiration price line', { error: error.message });
+                }
+            }
+            this.expirationPriceLine = null;
+        }
+    }
+    
+    // Обновить позицию линии экспирации
+    updateExpirationPriceLinePosition(price) {
+        if (!this.expirationPriceLine) return;
+        
+        const activeSeries = this.getActiveSeries();
+        if (!activeSeries) return;
+        
+        try {
+            // Обновляем цену линии (это переместит её по y-axis)
+            activeSeries.removePriceLine(this.expirationPriceLine);
+            
+            const currentTitle = this.expirationPriceLine.options().title || `${this.timeframe} 00:00`;
+            
+            this.expirationPriceLine = activeSeries.createPriceLine({
+                price: price,
+                color: '#4f9fff',
+                lineWidth: 2,
+                lineStyle: LightweightCharts.LineStyle.Solid,
+                axisLabelVisible: true,
+                title: currentTitle,
+                axisLabelColor: '#4f9fff',
+                axisLabelTextColor: '#ffffff'
+            });
+        } catch (error) {
+            window.errorLogger?.error('chart', 'Error updating expiration price line position', { error: error.message });
+        }
+    }
+    
+    // Обновить текст линии экспирации
+    updateExpirationPriceLine(timeframe, formattedTime) {
+        if (!this.expirationPriceLine || !this.currentPrice) {
+            // Если линия не создана, создаем её
+            if (this.chartType !== 'line' && this.currentPrice) {
+                this.createExpirationPriceLine();
+            }
+        }
+        
+        if (!this.expirationPriceLine) return;
+        
+        const activeSeries = this.getActiveSeries();
+        if (!activeSeries) return;
+        
+        try {
+            // Пересоздаем линию с новым текстом
+            activeSeries.removePriceLine(this.expirationPriceLine);
+            
+            this.expirationPriceLine = activeSeries.createPriceLine({
+                price: this.currentPrice,
+                color: '#4f9fff',
+                lineWidth: 2,
+                lineStyle: LightweightCharts.LineStyle.Solid,
+                axisLabelVisible: true,
+                title: `${timeframe} ${formattedTime}`,
+                axisLabelColor: '#4f9fff',
+                axisLabelTextColor: '#ffffff'
+            });
+        } catch (error) {
+            window.errorLogger?.error('chart', 'Error updating expiration price line', { error: error.message });
+        }
     }
 
     // 🎨 ИНТЕРПОЛЯЦИЯ - плавная анимация между тиками (60fps визуально)
@@ -1074,6 +1191,9 @@ class ChartManager {
         }
         this.currentInterpolatedCandle = null;
         this.targetCandle = null;
+        
+        // Удаляем линию экспирации при смене символа
+        this.removeExpirationPriceLine();
 
         // Очищаем график и сбрасываем счетчики
         if (this.candleSeries) {
@@ -1105,6 +1225,15 @@ class ChartManager {
 
         // Переиспользуем соединение (если есть) или создаем новое
         this.connectWebSocket(newSymbol);
+        
+        // Пересоздаем линию экспирации для нового символа (если нужно)
+        if (this.chartType !== 'line') {
+            setTimeout(() => {
+                if (this.currentPrice) {
+                    this.createExpirationPriceLine();
+                }
+            }, 500);
+        }
         
         window.errorLogger?.info('chart', 'Chart switched successfully', { 
             symbol: newSymbol,
@@ -1154,10 +1283,11 @@ class ChartManager {
             this.barSeries.applyOptions({ visible: type === 'bars' });
         }
         
-        // Показываем/скрываем таймер экспирации
-        const timerEl = document.getElementById('chart-expiration-timer');
-        if (timerEl) {
-            timerEl.style.display = (type === 'candles' || type === 'bars') ? 'flex' : 'none';
+        // Создаем/удаляем линию экспирации в зависимости от типа графика
+        if (type === 'candles' || type === 'bars') {
+            this.createExpirationPriceLine();
+        } else {
+            this.removeExpirationPriceLine();
         }
         
         // Для line графика останавливаем таймер экспирации
@@ -1165,11 +1295,18 @@ class ChartManager {
             if (window.chartTimeframeManager) {
                 window.chartTimeframeManager.stopExpirationTimer();
             }
+            this.removeExpirationPriceLine();
         } else {
-            // Для candles/bars перезапускаем таймер
+            // Для candles/bars перезапускаем таймер и создаем линию
             if (window.chartTimeframeManager) {
                 this.setTimeframe(this.timeframe);
             }
+            // Небольшая задержка для корректного создания линии после переключения
+            setTimeout(() => {
+                if (this.currentPrice) {
+                    this.createExpirationPriceLine();
+                }
+            }, 100);
         }
         
         window.errorLogger?.info('chart', 'Chart type changed', { type });
@@ -1183,15 +1320,8 @@ class ChartManager {
         // Обновляем таймер экспирации только для candles/bars
         if (this.chartType !== 'line' && window.chartTimeframeManager) {
             window.chartTimeframeManager.setTimeframe(timeframe, (formatted, timeLeft, tf) => {
-                const timerValueEl = document.getElementById('timer-value');
-                const timerTimeframeEl = document.getElementById('timer-timeframe');
-                
-                if (timerValueEl) {
-                    timerValueEl.textContent = formatted;
-                }
-                if (timerTimeframeEl) {
-                    timerTimeframeEl.textContent = tf;
-                }
+                // Обновляем линию экспирации на графике
+                this.updateExpirationPriceLine(tf, formatted);
             });
         }
         
@@ -1240,6 +1370,9 @@ class ChartManager {
         if (window.chartTimeframeManager) {
             window.chartTimeframeManager.destroy();
         }
+        
+        // Удаляем линию экспирации
+        this.removeExpirationPriceLine();
         
         // Полностью очищаем WebSocket
         this.closeWebSocket();
