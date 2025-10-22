@@ -110,8 +110,8 @@ class ChartManager {
             borderDownColor: '#ff4757',
             wickUpColor: '#26d07c',
             wickDownColor: '#ff4757',
-            priceLineVisible: true,
-            lastValueVisible: true,
+            priceLineVisible: false,
+            lastValueVisible: false, // Отключено чтобы избежать дублирования с линией экспирации
             priceFormat: {
                 type: 'price',
                 precision: 4,
@@ -124,8 +124,8 @@ class ChartManager {
         this.lineSeries = this.chart.addLineSeries({
             color: '#4f9fff',
             lineWidth: 2,
-            priceLineVisible: true,
-            lastValueVisible: true,
+            priceLineVisible: false,
+            lastValueVisible: false, // Отключено чтобы избежать дублирования с линией экспирации
             priceFormat: {
                 type: 'price',
                 precision: 4,
@@ -142,8 +142,8 @@ class ChartManager {
             borderDownColor: '#ff4757',
             wickUpColor: '#26d07c',
             wickDownColor: '#ff4757',
-            priceLineVisible: true,
-            lastValueVisible: true,
+            priceLineVisible: false,
+            lastValueVisible: false, // Отключено чтобы избежать дублирования с линией экспирации
             priceFormat: {
                 type: 'price',
                 precision: 4,
@@ -1006,10 +1006,16 @@ class ChartManager {
             lineWidth: 2,
             lineStyle: LightweightCharts.LineStyle.Solid,
             axisLabelVisible: true,
-            title: `${this.timeframe} 00:00`,
+            title: '', // Убираем title, так как теперь показываем время в отдельном элементе
             axisLabelColor: '#4f9fff',
             axisLabelTextColor: '#ffffff'
         });
+        
+        // Показываем таймер на графике
+        const timerEl = document.getElementById('chart-expiration-timer');
+        if (timerEl && this.chartType !== 'line') {
+            timerEl.style.display = 'flex';
+        }
         
         window.errorLogger?.info('chart', 'Expiration price line created');
     }
@@ -1081,12 +1087,34 @@ class ChartManager {
                 lineWidth: 2,
                 lineStyle: LightweightCharts.LineStyle.Solid,
                 axisLabelVisible: true,
-                title: `${timeframe} ${formattedTime}`,
+                title: '', // Убираем title с графика
                 axisLabelColor: '#4f9fff',
                 axisLabelTextColor: '#ffffff'
             });
+            
+            // Обновляем таймер на графике
+            this.updateChartTimer(timeframe, formattedTime);
         } catch (error) {
             window.errorLogger?.error('chart', 'Error updating expiration price line', { error: error.message });
+        }
+    }
+    
+    // Обновить таймер экспирации на графике
+    updateChartTimer(timeframe, formattedTime) {
+        const timerEl = document.getElementById('chart-expiration-timer');
+        const timerValueEl = document.getElementById('chart-timer-value');
+        const timerTimeframeEl = document.getElementById('chart-timer-timeframe');
+        
+        if (timerEl && timerValueEl && timerTimeframeEl) {
+            timerValueEl.textContent = formattedTime;
+            timerTimeframeEl.textContent = timeframe;
+            
+            // Показываем таймер только для candles и bars
+            if (this.chartType !== 'line') {
+                timerEl.style.display = 'flex';
+            } else {
+                timerEl.style.display = 'none';
+            }
         }
     }
 
@@ -1281,6 +1309,12 @@ class ChartManager {
         }
         if (this.barSeries) {
             this.barSeries.applyOptions({ visible: type === 'bars' });
+        }
+        
+        // Скрываем/показываем таймер на графике
+        const timerEl = document.getElementById('chart-expiration-timer');
+        if (timerEl) {
+            timerEl.style.display = (type === 'candles' || type === 'bars') ? 'flex' : 'none';
         }
         
         // Создаем/удаляем линию экспирации в зависимости от типа графика
