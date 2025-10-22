@@ -249,16 +249,45 @@ class ChartGenerator {
         
         if (this.candles.length > TRIM_THRESHOLD) {
             const toRemove = this.candles.length - KEEP_CANDLES;
+            const beforeTrim = this.candles[this.candles.length - 1]; // последняя свеча до обрезки
             this.candles = this.candles.slice(toRemove);
+            const afterTrim = this.candles[this.candles.length - 1]; // последняя свеча после обрезки
+            
+            // 🔧 КРИТИЧНО: Проверяем что обрезка не нарушила непрерывность
+            if (beforeTrim.time !== afterTrim.time) {
+                logger.error('memory', 'TRIM CHANGED LAST CANDLE!', {
+                    symbol: this.symbol,
+                    beforeTime: beforeTrim.time,
+                    afterTime: afterTrim.time,
+                    beforeClose: beforeTrim.close,
+                    afterClose: afterTrim.close
+                });
+            }
+            
+            // Обновляем currentPrice на основе последней свечи после обрезки
+            this.currentPrice = afterTrim.close;
             
             logger.info('memory', 'Candle memory trimmed (sliding window)', {
                 symbol: this.symbol,
                 removed: toRemove,
                 remaining: this.candles.length,
                 threshold: TRIM_THRESHOLD,
-                keepCandles: KEEP_CANDLES
+                keepCandles: KEEP_CANDLES,
+                lastCandleClose: afterTrim.close,
+                currentPrice: this.currentPrice
             });
         }
+        
+        // 🔧 КРИТИЧЕСКИ ВАЖНО: Обновляем currentPrice для следующей свечи
+        // Это гарантирует что следующая свеча начнется с close текущей
+        this.currentPrice = candle.close;
+        
+        logger.debug('candle', 'currentPrice updated after new candle', {
+            symbol: this.symbol,
+            newCurrentPrice: this.currentPrice,
+            candleClose: candle.close,
+            candleOpen: candle.open
+        });
         
         // Инициализируем состояние текущей свечи для плавных обновлений
         // Начинаем с текущей цены и позволяем тикам развивать свечу
@@ -477,6 +506,11 @@ class ChartGenerator {
             meanReversionSpeed: this.meanReversionSpeed,
             candles: candlesToSave,
             currentCandleState: this.currentCandleState,
+            // 🌊 Сохраняем состояние волнообразного движения для непрерывности
+            currentDrift: this.currentDrift,
+            trendChangeCounter: this.trendChangeCounter,
+            trendChangePeriod: this.trendChangePeriod,
+            trendStrength: this.trendStrength,
             savedAt: Date.now(),
             savedCandleCount: candlesToSave.length
         };
@@ -492,6 +526,27 @@ class ChartGenerator {
         // Восстанавливаем состояние
         this.currentPrice = data.currentPrice || this.basePrice;
         this.currentCandleState = data.currentCandleState || null;
+        
+        // 🌊 Восстанавливаем состояние волнообразного движения
+        if (typeof data.currentDrift === 'number') {
+            this.currentDrift = data.currentDrift;
+        }
+        if (typeof data.trendChangeCounter === 'number') {
+            this.trendChangeCounter = data.trendChangeCounter;
+        }
+        if (typeof data.trendChangePeriod === 'number') {
+            this.trendChangePeriod = data.trendChangePeriod;
+        }
+        if (typeof data.trendStrength === 'number') {
+            this.trendStrength = data.trendStrength;
+        }
+        
+        logger.info('persistence', 'Trend state restored', {
+            symbol: this.symbol,
+            currentDrift: this.currentDrift,
+            trendChangeCounter: this.trendChangeCounter,
+            trendChangePeriod: this.trendChangePeriod
+        });
         
         // Генерируем 3 дня истории
         this.generateHistoricalData();
