@@ -36,7 +36,7 @@ class ChartManager {
         this.targetCandle = null; // целевое состояние свечи (куда движемся)
         this.currentInterpolatedCandle = null; // текущее интерполированное состояние
         this.interpolationStartTime = null; // время начала интерполяции
-        this.interpolationDuration = 200; // длительность интерполяции (ms) - плавный переход между тиками
+        this.interpolationDuration = 300; // длительность интерполяции (ms) - плавный переход между тиками (замедлено на 50% для реалистичности)
         this.animationFrameId = null; // ID для requestAnimationFrame
         this.lastTickTime = 0; // время последнего тика для расчета интерполяции
     }
