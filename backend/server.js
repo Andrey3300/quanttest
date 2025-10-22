@@ -450,6 +450,30 @@ setInterval(() => {
         return;
       }
       
+      // КРИТИЧЕСКАЯ ВАЛИДАЦИЯ: Проверяем непрерывность перед отправкой
+      const allCandles = generator.candles;
+      if (allCandles.length >= 2) {
+        const previousCandle = allCandles[allCandles.length - 2]; // Предпоследняя свеча
+        const currentCandle = allCandles[allCandles.length - 1];  // Последняя свеча (новая)
+        
+        if (currentCandle.open !== previousCandle.close) {
+          logger.error('websocket', '❌ CONTINUITY BROKEN before sending!', {
+            symbol: symbol,
+            previousTime: previousCandle.time,
+            previousClose: previousCandle.close,
+            currentTime: currentCandle.time,
+            currentOpen: currentCandle.open,
+            difference: Math.abs(currentCandle.open - previousCandle.close)
+          });
+          console.error(`❌ CONTINUITY BROKEN for ${symbol}: prev.close=${previousCandle.close} !== current.open=${currentCandle.open}`);
+        } else {
+          logger.debug('websocket', '✅ Continuity verified before sending', {
+            symbol: symbol,
+            price: currentCandle.open
+          });
+        }
+      }
+      
       // РЕШЕНИЕ #5: Валидация OHLC перед отправкой
       const isValidOHLC = newCandle.high >= newCandle.low &&
                           newCandle.high >= newCandle.open &&
