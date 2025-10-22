@@ -639,9 +639,22 @@ class ChartManager {
                         // Обновляем счетчик
                         this.candleCount = trimmedCandles.length;
                         
-                        // Обновляем последнюю свечу
+                        // 🔧 КРИТИЧЕСКИ ВАЖНО: Обновляем lastCandle и синхронизируем состояние
                         if (trimmedCandles.length > 0) {
                             this.lastCandle = trimmedCandles[trimmedCandles.length - 1];
+                            
+                            // Проверяем непрерывность после обрезки
+                            window.errorLogger?.info('chart', 'Post-trim continuity check', {
+                                lastCandleTime: this.lastCandle.time,
+                                lastCandleOpen: this.lastCandle.open,
+                                lastCandleClose: this.lastCandle.close,
+                                currentInterpolatedClose: this.currentInterpolatedCandle?.close
+                            });
+                            
+                            // Синхронизируем интерполированное состояние
+                            if (this.currentInterpolatedCandle) {
+                                this.currentInterpolatedCandle = { ...this.lastCandle };
+                            }
                         }
                         
                         // Также обрезаем объемы

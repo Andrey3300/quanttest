@@ -479,16 +479,46 @@ setInterval(() => {
       const previousCandle = allCandles[allCandles.length - 2]; // Предпоследняя свеча
       const currentCandle = allCandles[allCandles.length - 1];  // Последняя свеча (новая)
       
-      if (currentCandle.open !== previousCandle.close) {
+      // Используем небольшой порог для учета погрешности округления
+      const epsilon = 0.0000001;
+      const priceDiff = Math.abs(currentCandle.open - previousCandle.close);
+      
+      if (priceDiff > epsilon) {
         logger.error('websocket', '❌ CONTINUITY BROKEN before sending!', {
           symbol: symbol,
           previousTime: previousCandle.time,
           previousClose: previousCandle.close,
           currentTime: currentCandle.time,
           currentOpen: currentCandle.open,
-          difference: Math.abs(currentCandle.open - previousCandle.close)
+          difference: priceDiff
         });
-        console.error(`❌ CONTINUITY BROKEN for ${symbol}: prev.close=${previousCandle.close} !== current.open=${currentCandle.open}`);
+        console.error(`❌ CONTINUITY BROKEN for ${symbol}: prev.close=${previousCandle.close} !== current.open=${currentCandle.open}, diff=${priceDiff}`);
+        
+        // 🔧 АВТОКОРРЕКЦИЯ: Исправляем open текущей свечи
+        logger.warn('websocket', 'Auto-correcting candle open price', {
+          symbol: symbol,
+          oldOpen: currentCandle.open,
+          newOpen: previousCandle.close
+        });
+        currentCandle.open = previousCandle.close;
+        
+        // Также корректируем high и low если нужно
+        if (currentCandle.high < currentCandle.open) {
+          currentCandle.high = currentCandle.open;
+        }
+        if (currentCandle.low > currentCandle.open) {
+          currentCandle.low = currentCandle.open;
+        }
+        
+        // Обновляем newCandle для отправки
+        newCandle.open = currentCandle.open;
+        newCandle.high = currentCandle.high;
+        newCandle.low = currentCandle.low;
+        
+        logger.info('websocket', '✅ Continuity auto-corrected', {
+          symbol: symbol,
+          correctedOpen: newCandle.open
+        });
       } else {
         logger.debug('websocket', '✅ Continuity verified before sending', {
           symbol: symbol,
