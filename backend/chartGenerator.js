@@ -175,6 +175,12 @@ class ChartGenerator {
         const now = Date.now();
         const intervalSeconds = 5; // интервал свечи
         
+        // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Синхронизируем currentPrice с close последней свечи
+        if (this.candles.length > 0) {
+            const lastCandle = this.candles[this.candles.length - 1];
+            this.currentPrice = lastCandle.close; // Гарантируем непрерывность!
+        }
+        
         // Новая свеча ВСЕГДА начинается с цены закрытия предыдущей свечи
         const openPrice = this.currentPrice;
         
@@ -197,7 +203,9 @@ class ChartGenerator {
                 });
                 // Используем timestamp последней свечи + интервал
                 const timestamp = lastCandle.time + intervalSeconds;
-                const candle = this.generateCandle(timestamp * 1000, openPrice);
+                // Убедимся что openPrice = close предыдущей свечи
+                const adjustedOpenPrice = lastCandle.close;
+                const candle = this.generateCandle(timestamp * 1000, adjustedOpenPrice);
                 
                 this.candles.push(candle);
                 this.currentPrice = candle.close;
@@ -233,7 +241,8 @@ class ChartGenerator {
         }
         
         // КРИТИЧЕСКОЕ УЛУЧШЕНИЕ: Генерируем полноценную свечу с вариацией сразу
-        const candle = this.generateCandle(alignedTimestamp * 1000, openPrice);
+        // Убедимся что openPrice = close последней свечи
+        const candle = this.generateCandle(alignedTimestamp * 1000, this.currentPrice);
         
         this.candles.push(candle);
         this.currentPrice = candle.close;
@@ -262,7 +271,10 @@ class ChartGenerator {
             time: candle.time,
             timeISO: new Date(candle.time * 1000).toISOString(),
             open: candle.open,
-            close: candle.close
+            close: candle.close,
+            // Проверка непрерывности
+            previousClose: this.candles.length > 1 ? this.candles[this.candles.length - 2].close : null,
+            isContinuous: this.candles.length > 1 ? (candle.open === this.candles[this.candles.length - 2].close) : true
         });
 
         return candle;
@@ -366,6 +378,8 @@ class ChartGenerator {
         if (this.candles.length > 0) {
             const lastCandle = this.candles[this.candles.length - 1];
             if (lastCandle.time === this.currentCandleState.time) {
+                // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: НЕ ИЗМЕНЯЕМ open при тиках!
+                // lastCandle.open = this.currentCandleState.open; // НЕ МЕНЯЕМ!
                 lastCandle.close = this.currentCandleState.close;
                 lastCandle.high = this.currentCandleState.high;
                 lastCandle.low = this.currentCandleState.low;
