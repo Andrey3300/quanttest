@@ -11,7 +11,7 @@ class ChartManager {
         this.isInitialized = false;
         this.isUserInteracting = false; // флаг взаимодействия пользователя
         this.lastUpdateTime = 0; // время последнего обновления
-        this.updateThrottle = 16; // минимальный интервал между обновлениями (ms) - 60 FPS для максимальной плавности
+        this.updateThrottle = 50; // минимальный интервал между обновлениями (ms) - 20 FPS для стабильной анимации
         this.lastCandle = null; // последняя свеча для отслеживания
         this.candleCount = 0; // количество свечей для корректного расчета индексов
         this.isDestroyed = false; // флаг уничтожения для предотвращения переподключения
@@ -39,8 +39,8 @@ class ChartManager {
             target: null,    // целевые значения {close, high, low}
             candleData: null // полные данные свечи {time, open, close, high, low, volume}
         };
-        this.lerpFactor = 0.015; // коэффициент интерполяции (снижен в 6.7 раз для максимальной плавности)
-        this.animationThreshold = 0.000008; // минимальная разница для остановки анимации (уменьшен пропорционально)
+        this.lerpFactor = 0.25; // коэффициент интерполяции (увеличен для быстрой реакции на изменения)
+        this.animationThreshold = 0.00001; // минимальная разница для остановки анимации
     }
 
     // Инициализация графика

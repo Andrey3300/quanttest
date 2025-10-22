@@ -173,31 +173,83 @@ class ChartGenerator {
     // Генерация новой свечи для real-time обновления
     generateNextCandle() {
         const now = Date.now();
-
-        
         const intervalSeconds = 5; // интервал свечи
         
         // Новая свеча ВСЕГДА начинается с цены закрытия предыдущей свечи
         const openPrice = this.currentPrice;
         
-
-        // УЛУЧШЕНИЕ: Рассчитываем timestamp от последней свечи для монотонности
-        let timestamp;
+        // ИСПРАВЛЕНИЕ: Синхронизируем timestamp с РЕАЛЬНЫМ временем, а не с последней свечой
+        // Это гарантирует что свечи создаются в правильной временной последовательности
+        const currentTimeSeconds = Math.floor(now / 1000);
+        const alignedTimestamp = Math.floor(currentTimeSeconds / intervalSeconds) * intervalSeconds;
+        
+        // Проверяем что новый timestamp больше последней свечи
         if (this.candles.length > 0) {
             const lastCandle = this.candles[this.candles.length - 1];
-            timestamp = lastCandle.time + intervalSeconds; // строго больше предыдущего
-        } else {
-            const currentTimeSeconds = Math.floor(now / 1000);
-            timestamp = Math.floor(currentTimeSeconds / intervalSeconds) * intervalSeconds;
+            
+            // Если выровненный timestamp не больше последней свечи, берем следующий интервал
+            if (alignedTimestamp <= lastCandle.time) {
+                logger.warn('candle', 'Timestamp collision detected - adjusting', {
+                    symbol: this.symbol,
+                    alignedTimestamp: alignedTimestamp,
+                    lastCandleTime: lastCandle.time,
+                    adjustment: 'Using next interval'
+                });
+                // Используем timestamp последней свечи + интервал
+                const timestamp = lastCandle.time + intervalSeconds;
+                const candle = this.generateCandle(timestamp * 1000, openPrice);
+                
+                this.candles.push(candle);
+                this.currentPrice = candle.close;
+                
+                // Обновляем currentCandleState для новой свечи
+                this.currentCandleState = {
+                    time: candle.time,
+                    open: candle.open,
+                    high: candle.high,
+                    low: candle.low,
+                    close: candle.close,
+                    volume: candle.volume,
+                    targetClose: candle.close,
+                    targetHigh: candle.high,
+                    targetLow: candle.low
+                };
+                
+                // Ограничиваем размер массива
+                const maxCandles = 7 * 24 * 60 * 12;
+                if (this.candles.length > maxCandles) {
+                    this.candles.shift();
+                }
+                
+                logger.info('candle', 'New candle created (adjusted)', {
+                    symbol: this.symbol,
+                    time: candle.time,
+                    open: candle.open,
+                    close: candle.close
+                });
+                
+                return candle;
+            }
         }
         
         // КРИТИЧЕСКОЕ УЛУЧШЕНИЕ: Генерируем полноценную свечу с вариацией сразу
-        // Это решает проблему одинаковых свечей (open=high=low=close)
-
-     
-        const candle = this.generateCandle(timestamp * 1000, openPrice);
+        const candle = this.generateCandle(alignedTimestamp * 1000, openPrice);
         
         this.candles.push(candle);
+        this.currentPrice = candle.close;
+        
+        // Обновляем currentCandleState для новой свечи
+        this.currentCandleState = {
+            time: candle.time,
+            open: candle.open,
+            high: candle.high,
+            low: candle.low,
+            close: candle.close,
+            volume: candle.volume,
+            targetClose: candle.close,
+            targetHigh: candle.high,
+            targetLow: candle.low
+        };
         
         // Ограничиваем размер массива (храним последние 7 дней)
         const maxCandles = 7 * 24 * 60 * 12; // 7 дней * 5-секундные свечи
@@ -205,8 +257,13 @@ class ChartGenerator {
             this.candles.shift();
         }
         
-
-        console.log(`New candle created for ${this.symbol} at time ${candle.time}`);
+        logger.info('candle', 'New candle created', {
+            symbol: this.symbol,
+            time: candle.time,
+            timeISO: new Date(candle.time * 1000).toISOString(),
+            open: candle.open,
+            close: candle.close
+        });
 
         return candle;
     }
