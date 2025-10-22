@@ -30,6 +30,17 @@ class ChartManager {
         // Защита от схлопывания
         this.MIN_VISIBLE_BARS = 10; // минимальная ширина видимого диапазона
         this.isRestoringRange = false; // флаг восстановления диапазона
+        
+        // Плавная анимация для активной свечи
+        this.animationState = {
+            isAnimating: false,
+            animationFrameId: null,
+            displayed: null, // текущие отображаемые значения {close, high, low}
+            target: null,    // целевые значения {close, high, low}
+            candleData: null // полные данные свечи {time, open, close, high, low, volume}
+        };
+        this.lerpFactor = 0.25; // коэффициент интерполяции (0.2-0.3 для плавности)
+        this.animationThreshold = 0.0001; // минимальная разница для остановки анимации
     }
 
     // Инициализация графика
@@ -74,9 +85,9 @@ class ChartManager {
                 borderColor: '#2d3748',
                 timeVisible: true,
                 secondsVisible: true,
-                barSpacing: 8, // Делаем свечи толще
-                minBarSpacing: 4, // Минимальная толщина при максимальном отдалении
-                rightOffset: 12, // Отступ справа для последней свечи
+                barSpacing: 12, // Увеличено пространство между свечами (с 8 до 12)
+                minBarSpacing: 6, // Увеличена минимальная толщина (с 4 до 6)
+                rightOffset: 25, // Увеличен отступ справа (с 12 до 25)
                 lockVisibleTimeRangeOnResize: true,
             },
         });
@@ -179,7 +190,7 @@ class ChartManager {
             
             // Проверяем на схлопывание
             const visibleBars = range.to - range.from;
-            const rightOffsetBars = 12;
+            const rightOffsetBars = 25; // синхронизировано с rightOffset в настройках
             const pureVisibleBars = visibleBars - rightOffsetBars;
             
             if (pureVisibleBars < this.MIN_VISIBLE_BARS) {
@@ -193,7 +204,7 @@ class ChartManager {
                 console.error('Chart collapse detected! Range too narrow:', pureVisibleBars, 'bars');
                 
                 // УЛУЧШЕНИЕ: Используем candleCount для безопасного восстановления
-                const safeVisibleBars = 100; // отображаем последние 100 свечей
+                const safeVisibleBars = 70; // отображаем последние 70 свечей для большего пространства
                 
                 // Проверяем что у нас достаточно свечей
                 if (this.candleCount < safeVisibleBars) {
@@ -298,12 +309,12 @@ class ChartManager {
             });
             this.chart.timeScale().fitContent();
             
-            // Устанавливаем начальный видимый диапазон (последние ~100 свечей)
+            // Устанавливаем начальный видимый диапазон (последние ~70 свечей для большего пространства)
             if (data.length > 0) {
                 // Используем фиксированный отступ справа (rightOffset из настроек)
-                const rightOffsetBars = 12; // соответствует rightOffset в настройках
+                const rightOffsetBars = 25; // синхронизировано с rightOffset в настройках
                 const visibleLogicalRange = {
-                    from: Math.max(0, data.length - 100),
+                    from: Math.max(0, data.length - 70), // уменьшено с 100 до 70
                     to: data.length - 1 + rightOffsetBars
                 };
                 this.chart.timeScale().setVisibleLogicalRange(visibleLogicalRange);
@@ -569,81 +580,98 @@ class ChartManager {
             return;
         }
         
-        // Троттлинг обновлений - не чаще чем каждые 50ms (только для тиков)
-        const now = Date.now();
-        if (!isNewCandle && (now - this.lastUpdateTime) < this.updateThrottle) {
-            return;
-        }
-        this.lastUpdateTime = now;
-
         // РЕШЕНИЕ #3: Отслеживаем успешность добавления свечи
         let actuallyAddedNewCandle = false;
         
-        // Обновляем свечу без перерисовки всего графика
+        // НОВАЯ ЛОГИКА: Плавная анимация для тиков, прямое обновление для новых свечей
         try {
-            this.candleSeries.update(candle);
-            
-            // РЕШЕНИЕ #2 ИСПРАВЛЕНО: Надежный подсчет через инкремент
-            // НЕ используем candleSeries.data().length т.к. он возвращает только буфер!
-            // Проверяем что свеча ДЕЙСТВИТЕЛЬНО добавлена
-            if (isNewCandle && candle.time > beforeUpdateTime) {
-                actuallyAddedNewCandle = true;
+            if (isNewCandle) {
+                // Новая свеча - останавливаем анимацию и обновляем сразу
+                this.stopCandleAnimation();
                 
-                // ВАЖНО: Простой инкремент - единственный надежный способ
-                this.candleCount++;
+                this.candleSeries.update(candle);
                 
-                window.errorLogger?.debug('chart', 'New candle added - count incremented', {
-                    newCandleCount: this.candleCount,
-                    candleTime: candle.time
-                });
-                
-                // КРИТИЧЕСКАЯ ЗАЩИТА: Ограничиваем количество свечей в памяти
-                if (this.candleCount > this.MAX_CANDLES_IN_MEMORY) {
-                    window.errorLogger?.warn('chart', 'Memory limit reached - cleaning old candles', {
-                        currentCount: this.candleCount,
-                        maxAllowed: this.MAX_CANDLES_IN_MEMORY
+                // РЕШЕНИЕ #2 ИСПРАВЛЕНО: Надежный подсчет через инкремент
+                // НЕ используем candleSeries.data().length т.к. он возвращает только буфер!
+                // Проверяем что свеча ДЕЙСТВИТЕЛЬНО добавлена
+                if (candle.time > beforeUpdateTime) {
+                    actuallyAddedNewCandle = true;
+                    
+                    // ВАЖНО: Простой инкремент - единственный надежный способ
+                    this.candleCount++;
+                    
+                    window.errorLogger?.debug('chart', 'New candle added - count incremented', {
+                        newCandleCount: this.candleCount,
+                        candleTime: candle.time
                     });
                     
-                    // Получаем все свечи из серии
-                    const allCandles = this.candleSeries.data();
-                    
-                    if (allCandles && allCandles.length > 0) {
-                        // Оставляем только последние MAX_CANDLES_IN_MEMORY свечей
-                        const candlesToKeep = Math.floor(this.MAX_CANDLES_IN_MEMORY * 0.75); // 75% для запаса
-                        const trimmedCandles = allCandles.slice(-candlesToKeep);
-                        
-                        window.errorLogger?.info('chart', 'Trimming candle data', {
-                            before: allCandles.length,
-                            after: trimmedCandles.length,
-                            removed: allCandles.length - trimmedCandles.length
+                    // КРИТИЧЕСКАЯ ЗАЩИТА: Ограничиваем количество свечей в памяти
+                    if (this.candleCount > this.MAX_CANDLES_IN_MEMORY) {
+                        window.errorLogger?.warn('chart', 'Memory limit reached - cleaning old candles', {
+                            currentCount: this.candleCount,
+                            maxAllowed: this.MAX_CANDLES_IN_MEMORY
                         });
                         
-                        // Применяем обрезанные данные
-                        this.candleSeries.setData(trimmedCandles);
+                        // Получаем все свечи из серии
+                        const allCandles = this.candleSeries.data();
                         
-                        // Обновляем счетчик
-                        this.candleCount = trimmedCandles.length;
-                        
-                        // Обновляем последнюю свечу
-                        if (trimmedCandles.length > 0) {
-                            this.lastCandle = trimmedCandles[trimmedCandles.length - 1];
-                        }
-                        
-                        // Также обрезаем объемы
-                        const allVolumes = this.volumeSeries.data();
-                        if (allVolumes && allVolumes.length > 0) {
-                            const trimmedVolumes = allVolumes.slice(-candlesToKeep);
-                            this.volumeSeries.setData(trimmedVolumes);
+                        if (allCandles && allCandles.length > 0) {
+                            // Оставляем только последние MAX_CANDLES_IN_MEMORY свечей
+                            const candlesToKeep = Math.floor(this.MAX_CANDLES_IN_MEMORY * 0.75); // 75% для запаса
+                            const trimmedCandles = allCandles.slice(-candlesToKeep);
+                            
+                            window.errorLogger?.info('chart', 'Trimming candle data', {
+                                before: allCandles.length,
+                                after: trimmedCandles.length,
+                                removed: allCandles.length - trimmedCandles.length
+                            });
+                            
+                            // Применяем обрезанные данные
+                            this.candleSeries.setData(trimmedCandles);
+                            
+                            // Обновляем счетчик
+                            this.candleCount = trimmedCandles.length;
+                            
+                            // Обновляем последнюю свечу
+                            if (trimmedCandles.length > 0) {
+                                this.lastCandle = trimmedCandles[trimmedCandles.length - 1];
+                            }
+                            
+                            // Также обрезаем объемы
+                            const allVolumes = this.volumeSeries.data();
+                            if (allVolumes && allVolumes.length > 0) {
+                                const trimmedVolumes = allVolumes.slice(-candlesToKeep);
+                                this.volumeSeries.setData(trimmedVolumes);
+                            }
                         }
                     }
                 }
+                
+                // Обновляем объем для новой свечи
+                this.volumeSeries.update({
+                    time: candle.time,
+                    value: candle.volume,
+                    color: candle.close >= candle.open ? '#26d07c80' : '#ff475780'
+                });
+            } else {
+                // Тик текущей свечи - используем плавную анимацию
+                // Троттлинг для тиков - не обновляем слишком часто
+                const now = Date.now();
+                if ((now - this.lastUpdateTime) < this.updateThrottle) {
+                    return;
+                }
+                this.lastUpdateTime = now;
+                
+                // Запускаем или обновляем анимацию
+                this.updateAnimationTarget(candle);
+                
+                // Объем обновляем без анимации (он накапливается)
+                this.volumeSeries.update({
+                    time: candle.time,
+                    value: candle.volume,
+                    color: candle.close >= candle.open ? '#26d07c80' : '#ff475780'
+                });
             }
-            
-            this.volumeSeries.update({
-                time: candle.time,
-                value: candle.volume,
-                color: candle.close >= candle.open ? '#26d07c80' : '#ff475780'
-            });
         } catch (error) {
             window.errorLogger?.error('chart', 'Error updating chart', {
                 error: error.message,
@@ -683,7 +711,7 @@ class ChartManager {
                         const currentRange = timeScale.getVisibleLogicalRange();
                         
                         if (currentRange) {
-                            const rightOffsetBars = 12; // фиксированный отступ справа из настроек
+                            const rightOffsetBars = 25; // синхронизировано с rightOffset в настройках
                             
                             // РЕШЕНИЕ #4: Используем candleCount напрямую, не создаем промежуточных переменных
                             // которые могут внести путаницу
@@ -843,6 +871,9 @@ class ChartManager {
             to: newSymbol 
         });
 
+        // Останавливаем анимацию
+        this.stopCandleAnimation();
+
         // Очищаем график и сбрасываем счетчики
         if (this.candleSeries) {
             this.candleSeries.setData([]);
@@ -898,12 +929,140 @@ class ChartManager {
         }
     }
 
+    // Плавная анимация свечи (lerp интерполяция)
+    animateCandle() {
+        if (!this.animationState.isAnimating || !this.animationState.displayed || !this.animationState.target) {
+            return;
+        }
+        
+        const state = this.animationState;
+        
+        // Linear interpolation (lerp) для каждого значения
+        state.displayed.close += (state.target.close - state.displayed.close) * this.lerpFactor;
+        state.displayed.high += (state.target.high - state.displayed.high) * this.lerpFactor;
+        state.displayed.low += (state.target.low - state.displayed.low) * this.lerpFactor;
+        
+        // Проверяем достигли ли мы цели (с учетом порога)
+        const closeDiff = Math.abs(state.target.close - state.displayed.close);
+        const highDiff = Math.abs(state.target.high - state.displayed.high);
+        const lowDiff = Math.abs(state.target.low - state.displayed.low);
+        
+        const maxDiff = Math.max(closeDiff, highDiff, lowDiff);
+        
+        if (maxDiff < this.animationThreshold) {
+            // Достигли цели - устанавливаем точные значения и останавливаем анимацию
+            state.displayed.close = state.target.close;
+            state.displayed.high = state.target.high;
+            state.displayed.low = state.target.low;
+            this.stopCandleAnimation();
+        }
+        
+        // Обновляем свечу на графике с анимированными значениями
+        if (this.candleSeries && state.candleData) {
+            const animatedCandle = {
+                time: state.candleData.time,
+                open: state.candleData.open,
+                close: state.displayed.close,
+                high: state.displayed.high,
+                low: state.displayed.low,
+                volume: state.candleData.volume
+            };
+            
+            try {
+                this.candleSeries.update(animatedCandle);
+                this.volumeSeries.update({
+                    time: animatedCandle.time,
+                    value: animatedCandle.volume,
+                    color: animatedCandle.close >= animatedCandle.open ? '#26d07c80' : '#ff475780'
+                });
+            } catch (error) {
+                window.errorLogger?.error('animation', 'Error updating animated candle', {
+                    error: error.message,
+                    animatedCandle: animatedCandle
+                });
+                console.error('Error updating animated candle:', error);
+                this.stopCandleAnimation();
+                return;
+            }
+        }
+        
+        // Продолжаем анимацию
+        if (state.isAnimating) {
+            state.animationFrameId = requestAnimationFrame(() => this.animateCandle());
+        }
+    }
+    
+    // Запуск анимации свечи
+    startCandleAnimation(candleData) {
+        const state = this.animationState;
+        
+        // Если уже анимируем - обновляем только целевые значения
+        if (state.isAnimating && state.displayed) {
+            state.target = {
+                close: candleData.close,
+                high: candleData.high,
+                low: candleData.low
+            };
+            state.candleData = candleData;
+            return;
+        }
+        
+        // Начинаем новую анимацию
+        state.displayed = {
+            close: candleData.close,
+            high: candleData.high,
+            low: candleData.low
+        };
+        state.target = {
+            close: candleData.close,
+            high: candleData.high,
+            low: candleData.low
+        };
+        state.candleData = candleData;
+        state.isAnimating = true;
+        
+        // Запускаем анимационный цикл
+        state.animationFrameId = requestAnimationFrame(() => this.animateCandle());
+    }
+    
+    // Остановка анимации свечи
+    stopCandleAnimation() {
+        const state = this.animationState;
+        
+        if (state.animationFrameId) {
+            cancelAnimationFrame(state.animationFrameId);
+            state.animationFrameId = null;
+        }
+        
+        state.isAnimating = false;
+    }
+    
+    // Обновление целевых значений анимации (для новых тиков)
+    updateAnimationTarget(candleData) {
+        const state = this.animationState;
+        
+        if (!state.isAnimating) {
+            // Если анимация не запущена - запускаем
+            this.startCandleAnimation(candleData);
+            return;
+        }
+        
+        // Обновляем целевые значения
+        state.target.close = candleData.close;
+        state.target.high = candleData.high;
+        state.target.low = candleData.low;
+        state.candleData = candleData;
+    }
+
     // Очистка ресурсов
     destroy() {
         window.errorLogger?.info('chart', 'Destroying chart manager');
         
         this.isDestroyed = true;
         this.isInitialized = false;
+        
+        // Останавливаем анимацию
+        this.stopCandleAnimation();
         
         // Отменяем все таймеры
         if (this.reconnectTimer) {
