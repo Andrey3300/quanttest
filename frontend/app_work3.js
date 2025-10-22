@@ -135,13 +135,6 @@ function showTradingPage() {
         // Увеличиваем задержку для правильной инициализации размеров
         setTimeout(() => {
             window.chartManager.init();
-            
-            // Применяем сохраненные настройки графика
-            window.chartManager.setChartType(chartType);
-            if (chartType !== 'line') {
-                window.chartManager.setTimeframe(chartTimeframe);
-            }
-            
             window.chartManager.loadHistoricalData('USD_MXN_OTC');
             window.chartManager.connectWebSocket('USD_MXN_OTC');
         }, 200);
@@ -474,121 +467,9 @@ function showAccountSwitchError(message) {
     }, 3000);
 }
 
-// ===== CHART SETTINGS =====
-let chartType = localStorage.getItem('chartType') || 'candles';
-let chartTimeframe = localStorage.getItem('chartTimeframe') || 'S5';
-
 // Настройки свечей
 function toggleCandleSettings() {
-    const modal = document.getElementById('chart-settings-modal');
-    if (modal) {
-        modal.style.display = 'flex';
-        // Восстанавливаем активные кнопки
-        updateChartSettingsUI();
-    }
-}
-
-// Закрыть модальное окно настроек
-function closeChartSettings() {
-    const modal = document.getElementById('chart-settings-modal');
-    if (modal) {
-        modal.style.display = 'none';
-    }
-}
-
-// Закрыть модальное окно при клике вне его
-document.addEventListener('click', (event) => {
-    const modal = document.getElementById('chart-settings-modal');
-    if (modal && event.target === modal) {
-        closeChartSettings();
-    }
-});
-
-// Выбрать тип графика
-function selectChartType(type) {
-    chartType = type;
-    localStorage.setItem('chartType', type);
-    
-    // Обновляем UI
-    document.querySelectorAll('.chart-type-btn').forEach(btn => {
-        btn.classList.remove('active');
-        if (btn.getAttribute('data-chart-type') === type) {
-            btn.classList.add('active');
-        }
-    });
-    
-    // Показать/скрыть секцию таймфреймов
-    const timeframeSection = document.getElementById('timeframe-section');
-    if (timeframeSection) {
-        if (type === 'line') {
-            timeframeSection.style.display = 'none';
-        } else {
-            timeframeSection.style.display = 'block';
-        }
-    }
-    
-    // Применяем изменения к графику
-    applyChartSettings();
-}
-
-// Выбрать таймфрейм
-function selectTimeframe(timeframe) {
-    chartTimeframe = timeframe;
-    localStorage.setItem('chartTimeframe', timeframe);
-    
-    // Обновляем UI
-    document.querySelectorAll('.timeframe-btn').forEach(btn => {
-        btn.classList.remove('active');
-        if (btn.getAttribute('data-timeframe') === timeframe) {
-            btn.classList.add('active');
-        }
-    });
-    
-    // Применяем изменения к графику
-    applyChartSettings();
-}
-
-// Обновить UI настроек графика
-function updateChartSettingsUI() {
-    // Активируем кнопку типа графика
-    document.querySelectorAll('.chart-type-btn').forEach(btn => {
-        btn.classList.remove('active');
-        if (btn.getAttribute('data-chart-type') === chartType) {
-            btn.classList.add('active');
-        }
-    });
-    
-    // Активируем кнопку таймфрейма
-    document.querySelectorAll('.timeframe-btn').forEach(btn => {
-        btn.classList.remove('active');
-        if (btn.getAttribute('data-timeframe') === chartTimeframe) {
-            btn.classList.add('active');
-        }
-    });
-    
-    // Показать/скрыть секцию таймфреймов
-    const timeframeSection = document.getElementById('timeframe-section');
-    if (timeframeSection) {
-        if (chartType === 'line') {
-            timeframeSection.style.display = 'none';
-        } else {
-            timeframeSection.style.display = 'block';
-        }
-    }
-}
-
-// Применить настройки графика
-function applyChartSettings() {
-    if (window.chartManager) {
-        // Обновляем тип графика и таймфрейм в chart manager
-        window.chartManager.setChartType(chartType);
-        
-        if (chartType !== 'line') {
-            window.chartManager.setTimeframe(chartTimeframe);
-        }
-    }
-    
-    console.log(`Chart settings applied: Type=${chartType}, Timeframe=${chartTimeframe}`);
+    alert('Настройки свечей будут добавлены позже');
 }
 
 // Пополнение счета

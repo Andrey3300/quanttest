@@ -5,8 +5,6 @@ class ChartManager {
     constructor() {
         this.chart = null;
         this.candleSeries = null;
-        this.lineSeries = null; // для Line графика
-        this.barSeries = null; // для Bars графика
         this.volumeSeries = null;
         this.ws = null;
         this.symbol = 'USD_MXN_OTC';
@@ -21,12 +19,6 @@ class ChartManager {
         this.connectionId = 0; // уникальный ID соединения для отслеживания
         this.processedCandles = new Set(); // сет для отслеживания обработанных свечей
         this.MAX_CANDLES_IN_MEMORY = 120960; // максимально 7 дней по 5-секундных свечей
-        
-        // НОВОЕ: Управление типом графика и таймфреймом
-        // Загружаем сохраненные настройки из localStorage
-        this.chartType = localStorage.getItem('chartType') || 'candles'; // 'line', 'candles', 'bars'
-        this.timeframe = localStorage.getItem('chartTimeframe') || 'S5'; // текущий таймфрейм
-        this.currentCandleByTimeframe = null; // текущая свеча для данного таймфрейма
         
         // РЕШЕНИЕ #6: Debounce для скролла
         this.scrollDebounceTimer = null;
@@ -113,39 +105,6 @@ class ChartManager {
                 precision: 4,
                 minMove: 0.0001,
             },
-            visible: this.chartType === 'candles',
-        });
-        
-        // Создаем серию линий для Line графика
-        this.lineSeries = this.chart.addLineSeries({
-            color: '#4f9fff',
-            lineWidth: 2,
-            priceLineVisible: true,
-            lastValueVisible: true,
-            priceFormat: {
-                type: 'price',
-                precision: 4,
-                minMove: 0.0001,
-            },
-            visible: this.chartType === 'line',
-        });
-        
-        // Создаем серию баров для Bars графика (используем candlestick с специальными настройками)
-        this.barSeries = this.chart.addCandlestickSeries({
-            upColor: '#26d07c',
-            downColor: '#ff4757',
-            borderUpColor: '#26d07c',
-            borderDownColor: '#ff4757',
-            wickUpColor: '#26d07c',
-            wickDownColor: '#ff4757',
-            priceLineVisible: true,
-            lastValueVisible: true,
-            priceFormat: {
-                type: 'price',
-                precision: 4,
-                minMove: 0.0001,
-            },
-            visible: this.chartType === 'bars',
         });
 
         // Создаем серию объемов (скрыта)
@@ -319,19 +278,8 @@ class ChartManager {
                 return;
             }
 
-            // Устанавливаем данные в зависимости от типа графика
-            if (this.chartType === 'line') {
-                // Для Line графика конвертируем OHLC в простые точки
-                const lineData = data.map(candle => ({
-                    time: candle.time,
-                    value: candle.close
-                }));
-                this.lineSeries.setData(lineData);
-            } else if (this.chartType === 'candles') {
-                this.candleSeries.setData(data);
-            } else if (this.chartType === 'bars') {
-                this.barSeries.setData(data);
-            }
+            // Устанавливаем данные свечей
+            this.candleSeries.setData(data);
             
             // Сохраняем количество свечей и последнюю свечу
             this.candleCount = data.length;
@@ -554,57 +502,9 @@ class ChartManager {
 
     // Обновление свечи с оптимизацией
     updateCandle(candle, isNewCandle = false) {
-        const activeSeries = this.getActiveSeries();
-        if (!activeSeries || !this.volumeSeries) {
+        if (!this.candleSeries || !this.volumeSeries) {
             window.errorLogger?.error('chart', 'updateCandle called but series not initialized');
             return;
-        }
-        
-        // Для Line графика - просто обновляем цену без группировки
-        if (this.chartType === 'line') {
-            const lineData = {
-                time: candle.time,
-                value: candle.close
-            };
-            
-            try {
-                this.lineSeries.update(lineData);
-                this.updatePriceDisplay(candle.close);
-            } catch (error) {
-                window.errorLogger?.error('chart', 'Error updating line chart', {
-                    error: error.message,
-                    lineData: lineData
-                });
-                console.error('Error updating line chart:', error);
-            }
-            return;
-        }
-        
-        // Для Candles и Bars - используем группировку по таймфрейму
-        if (this.chartType === 'candles' || this.chartType === 'bars') {
-            if (!window.chartTimeframeManager) {
-                window.errorLogger?.error('chart', 'chartTimeframeManager not available');
-                return;
-            }
-            
-            // Преобразуем данные свечи в формат тика для группировки
-            const tick = {
-                time: candle.time,
-                price: candle.close,
-                volume: candle.volume || 0
-            };
-            
-            // Обновляем/создаем свечу с учетом таймфрейма
-            const result = window.chartTimeframeManager.updateCandleWithTick(
-                this.currentCandleByTimeframe, 
-                tick, 
-                this.timeframe
-            );
-            
-            // Обновляем текущую свечу
-            this.currentCandleByTimeframe = result.candle;
-            isNewCandle = result.isNewCandle;
-            candle = result.candle;
         }
 
         // Проверяем корректность данных
@@ -684,8 +584,8 @@ class ChartManager {
         // РЕШЕНИЕ #3: Отслеживаем успешность добавления свечи
         let actuallyAddedNewCandle = false;
         
-        // 🎯 ИНТЕРПОЛЯЦИЯ: Для тиков используем плавную анимацию (только для Candles/Bars)
-        if (!isNewCandle && this.interpolationEnabled && this.lastCandle && this.chartType !== 'line') {
+        // 🎯 ИНТЕРПОЛЯЦИЯ: Для тиков используем плавную анимацию
+        if (!isNewCandle && this.interpolationEnabled && this.lastCandle) {
             // Это тик - запускаем интерполяцию от текущей свечи к новому состоянию
             const fromCandle = this.currentInterpolatedCandle || this.lastCandle;
             this.startInterpolation(fromCandle, candle);
@@ -696,7 +596,7 @@ class ChartManager {
         
         // Обновляем свечу без интерполяции (для новых свечей или если интерполяция выключена)
         try {
-            activeSeries.update(candle);
+            this.candleSeries.update(candle);
             
             // РЕШЕНИЕ #2 ИСПРАВЛЕНО: Надежный подсчет через инкремент
             // НЕ используем candleSeries.data().length т.к. он возвращает только буфер!
@@ -720,7 +620,7 @@ class ChartManager {
                     });
                     
                     // Получаем все свечи из серии
-                    const allCandles = activeSeries.data();
+                    const allCandles = this.candleSeries.data();
                     
                     if (allCandles && allCandles.length > 0) {
                         // Оставляем только последние MAX_CANDLES_IN_MEMORY свечей
@@ -734,7 +634,7 @@ class ChartManager {
                         });
                         
                         // Применяем обрезанные данные
-                        activeSeries.setData(trimmedCandles);
+                        this.candleSeries.setData(trimmedCandles);
                         
                         // Обновляем счетчик
                         this.candleCount = trimmedCandles.length;
@@ -1022,11 +922,7 @@ class ChartManager {
         
         // Обновляем график
         try {
-            const activeSeries = this.getActiveSeries();
-            if (activeSeries && this.chartType !== 'line') {
-                activeSeries.update(interpolated);
-            }
-            
+            this.candleSeries.update(interpolated);
             this.volumeSeries.update({
                 time: interpolated.time,
                 value: interpolated.volume,
@@ -1079,12 +975,6 @@ class ChartManager {
         if (this.candleSeries) {
             this.candleSeries.setData([]);
         }
-        if (this.lineSeries) {
-            this.lineSeries.setData([]);
-        }
-        if (this.barSeries) {
-            this.barSeries.setData([]);
-        }
         if (this.volumeSeries) {
             this.volumeSeries.setData([]);
         }
@@ -1092,7 +982,6 @@ class ChartManager {
         // Сбрасываем счетчики и последнюю свечу
         this.candleCount = 0;
         this.lastCandle = null;
-        this.currentCandleByTimeframe = null;
         
         // Очищаем сет обработанных свечей
         this.processedCandles.clear();
@@ -1137,81 +1026,6 @@ class ChartManager {
         }
     }
 
-    // НОВОЕ: Установить тип графика
-    setChartType(type) {
-        if (!this.chart) return;
-        
-        this.chartType = type;
-        
-        // Скрываем все серии
-        if (this.candleSeries) {
-            this.candleSeries.applyOptions({ visible: type === 'candles' });
-        }
-        if (this.lineSeries) {
-            this.lineSeries.applyOptions({ visible: type === 'line' });
-        }
-        if (this.barSeries) {
-            this.barSeries.applyOptions({ visible: type === 'bars' });
-        }
-        
-        // Показываем/скрываем таймер экспирации
-        const timerEl = document.getElementById('chart-expiration-timer');
-        if (timerEl) {
-            timerEl.style.display = (type === 'candles' || type === 'bars') ? 'flex' : 'none';
-        }
-        
-        // Для line графика останавливаем таймер экспирации
-        if (type === 'line') {
-            if (window.chartTimeframeManager) {
-                window.chartTimeframeManager.stopExpirationTimer();
-            }
-        } else {
-            // Для candles/bars перезапускаем таймер
-            if (window.chartTimeframeManager) {
-                this.setTimeframe(this.timeframe);
-            }
-        }
-        
-        window.errorLogger?.info('chart', 'Chart type changed', { type });
-        console.log(`Chart type changed to: ${type}`);
-    }
-    
-    // НОВОЕ: Установить таймфрейм
-    setTimeframe(timeframe) {
-        this.timeframe = timeframe;
-        
-        // Обновляем таймер экспирации только для candles/bars
-        if (this.chartType !== 'line' && window.chartTimeframeManager) {
-            window.chartTimeframeManager.setTimeframe(timeframe, (formatted, timeLeft, tf) => {
-                const timerValueEl = document.getElementById('timer-value');
-                const timerTimeframeEl = document.getElementById('timer-timeframe');
-                
-                if (timerValueEl) {
-                    timerValueEl.textContent = formatted;
-                }
-                if (timerTimeframeEl) {
-                    timerTimeframeEl.textContent = tf;
-                }
-            });
-        }
-        
-        window.errorLogger?.info('chart', 'Timeframe changed', { timeframe });
-        console.log(`Timeframe changed to: ${timeframe}`);
-    }
-    
-    // НОВОЕ: Получить активную серию в зависимости от типа графика
-    getActiveSeries() {
-        switch (this.chartType) {
-            case 'line':
-                return this.lineSeries;
-            case 'bars':
-                return this.barSeries;
-            case 'candles':
-            default:
-                return this.candleSeries;
-        }
-    }
-
     // Очистка ресурсов
     destroy() {
         window.errorLogger?.info('chart', 'Destroying chart manager');
@@ -1236,11 +1050,6 @@ class ChartManager {
             this.animationFrameId = null;
         }
         
-        // Останавливаем таймер экспирации
-        if (window.chartTimeframeManager) {
-            window.chartTimeframeManager.destroy();
-        }
-        
         // Полностью очищаем WebSocket
         this.closeWebSocket();
 
@@ -1250,8 +1059,6 @@ class ChartManager {
         }
 
         this.candleSeries = null;
-        this.lineSeries = null;
-        this.barSeries = null;
         this.volumeSeries = null;
     }
 }
