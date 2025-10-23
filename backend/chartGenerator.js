@@ -20,6 +20,10 @@ class ChartGenerator {
         this.maxCandleChange = 0.015; // максимальное изменение за свечу (1.5%)
         this.candles = [];
         
+        // 🛡️ ЗАЩИТА ОТ АНОМАЛИЙ: Лимиты для валидации свечей
+        this.MAX_CANDLE_RANGE_PERCENT = 0.025; // Максимальный размах свечи (2.5% от basePrice)
+        this.MAX_PRICE_JUMP_PERCENT = 0.02; // Максимальный скачок цены между свечами (2%)
+        
         // 🌊 СИСТЕМА ВОЛНООБРАЗНОГО ДВИЖЕНИЯ
         this.currentDrift = 0.0; // текущий динамический тренд (изменяется со временем)
         this.trendChangeCounter = 0; // счетчик для смены тренда
@@ -116,6 +120,90 @@ class ChartGenerator {
         return 8;                          // Для очень маленьких цен
     }
 
+    // 🛡️ ВАЛИДАЦИЯ СВЕЧИ НА АНОМАЛИИ
+    validateCandleAnomaly(candle, context = 'unknown') {
+        if (!candle) {
+            logger.error('validation', 'Candle is null', { symbol: this.symbol, context });
+            return { valid: false, reason: 'Null candle' };
+        }
+        
+        // Проверка размаха свечи (high - low)
+        const candleRange = candle.high - candle.low;
+        const rangePercent = candleRange / this.basePrice;
+        
+        if (rangePercent > this.MAX_CANDLE_RANGE_PERCENT) {
+            logger.error('validation', '🚨 BACKEND ANOMALY: Candle range too large!', {
+                symbol: this.symbol,
+                context,
+                candleRange: candleRange.toFixed(4),
+                rangePercent: (rangePercent * 100).toFixed(2) + '%',
+                maxAllowed: (this.MAX_CANDLE_RANGE_PERCENT * 100).toFixed(2) + '%',
+                basePrice: this.basePrice,
+                candle: {
+                    time: candle.time,
+                    open: candle.open,
+                    high: candle.high,
+                    low: candle.low,
+                    close: candle.close
+                }
+            });
+            
+            return { 
+                valid: false, 
+                reason: 'Range too large',
+                rangePercent,
+                maxAllowed: this.MAX_CANDLE_RANGE_PERCENT
+            };
+        }
+        
+        // Проверка OHLC логики
+        if (candle.high < candle.low || 
+            candle.high < candle.open || 
+            candle.high < candle.close ||
+            candle.low > candle.open ||
+            candle.low > candle.close) {
+            logger.error('validation', 'OHLC logic violation', {
+                symbol: this.symbol,
+                context,
+                candle
+            });
+            return { valid: false, reason: 'OHLC violation' };
+        }
+        
+        return { valid: true };
+    }
+    
+    // 🛡️ ПРОВЕРКА СКАЧКА ЦЕНЫ между свечами
+    validatePriceJump(previousCandle, newCandle) {
+        if (!previousCandle || !newCandle) {
+            return { valid: true }; // Нечего проверять
+        }
+        
+        const priceDiff = Math.abs(newCandle.open - previousCandle.close);
+        const jumpPercent = priceDiff / this.basePrice;
+        
+        if (jumpPercent > this.MAX_PRICE_JUMP_PERCENT) {
+            logger.error('validation', '🚨 BACKEND ANOMALY: Price jump too large!', {
+                symbol: this.symbol,
+                previousClose: previousCandle.close,
+                newOpen: newCandle.open,
+                difference: priceDiff.toFixed(4),
+                jumpPercent: (jumpPercent * 100).toFixed(2) + '%',
+                maxAllowed: (this.MAX_PRICE_JUMP_PERCENT * 100).toFixed(2) + '%',
+                basePrice: this.basePrice
+            });
+            
+            return {
+                valid: false,
+                reason: 'Price jump too large',
+                jumpPercent,
+                maxAllowed: this.MAX_PRICE_JUMP_PERCENT
+            };
+        }
+        
+        return { valid: true };
+    }
+
     // Генерация одной свечи с реалистичным OHLC
     generateCandle(timestamp, openPrice) {
         const close = this.generateNextPrice(openPrice);
@@ -139,7 +227,7 @@ class ChartGenerator {
         // Определяем точность для этого актива
         const precision = this.getPricePrecision(this.basePrice);
         
-        return {
+        const candle = {
             time: Math.floor(timestamp / 1000), // время в секундах для lightweight-charts
             open: parseFloat(openPrice.toFixed(precision)),
             high: parseFloat(high.toFixed(precision)),
@@ -147,6 +235,35 @@ class ChartGenerator {
             close: parseFloat(close.toFixed(precision)),
             volume: Math.max(1000, volume)
         };
+        
+        // 🛡️ ВАЛИДАЦИЯ: Проверяем свечу на аномалии
+        const validation = this.validateCandleAnomaly(candle, 'generateCandle');
+        if (!validation.valid) {
+            // Если свеча аномальная - ограничиваем её размер
+            logger.warn('validation', 'Limiting anomalous candle', {
+                symbol: this.symbol,
+                reason: validation.reason,
+                originalCandle: { ...candle }
+            });
+            
+            // Ограничиваем high и low в пределах допустимого диапазона
+            const maxAllowedRange = this.basePrice * this.MAX_CANDLE_RANGE_PERCENT;
+            const midPrice = (candle.open + candle.close) / 2;
+            
+            candle.high = Math.min(candle.high, midPrice + maxAllowedRange / 2);
+            candle.low = Math.max(candle.low, midPrice - maxAllowedRange / 2);
+            
+            // Убедимся что high >= open, close и low <= open, close
+            candle.high = Math.max(candle.high, candle.open, candle.close);
+            candle.low = Math.min(candle.low, candle.open, candle.close);
+            
+            logger.info('validation', 'Candle limited successfully', {
+                symbol: this.symbol,
+                limitedCandle: candle
+            });
+        }
+        
+        return candle;
     }
 
     // Генерация исторических данных за 3 дня с шагом 5 секунд
@@ -239,6 +356,32 @@ class ChartGenerator {
         // Генерируем полноценную свечу с вариацией сразу
         // Используем существующий метод generateCandle() вместо плоской свечи
         const candle = this.generateCandle(timestamp * 1000, openPrice);
+        
+        // 🛡️ ВАЛИДАЦИЯ: Проверяем скачок цены между свечами
+        if (this.candles.length > 0) {
+            const previousCandle = this.candles[this.candles.length - 1];
+            const jumpValidation = this.validatePriceJump(previousCandle, candle);
+            
+            if (!jumpValidation.valid) {
+                // Корректируем open новой свечи чтобы убрать скачок
+                logger.warn('validation', 'Correcting price jump', {
+                    symbol: this.symbol,
+                    originalOpen: candle.open,
+                    previousClose: previousCandle.close
+                });
+                
+                candle.open = previousCandle.close;
+                
+                // Пересчитываем high и low с учетом нового open
+                candle.high = Math.max(candle.high, candle.open, candle.close);
+                candle.low = Math.min(candle.low, candle.open, candle.close);
+                
+                logger.info('validation', 'Price jump corrected', {
+                    symbol: this.symbol,
+                    correctedOpen: candle.open
+                });
+            }
+        }
         
         this.candles.push(candle);
         

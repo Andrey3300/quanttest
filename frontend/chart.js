@@ -70,6 +70,11 @@ class ChartManager {
         this.isFirstTickAfterChange = false;
         this.changeSymbolDebugMode = false; // Debug режим на 30 секунд после смены актива
         this.changeSymbolDebugTimer = null;
+        
+        // 🛡️ ЗАЩИТА ОТ RACE CONDITION: Блокировка тиков до полной инициализации
+        this.isInitializingSymbol = false; // Флаг инициализации актива
+        this.pendingTicks = []; // Очередь тиков полученных во время инициализации
+        this.lastHistoricalCandle = null; // Последняя историческая свеча для умной валидации
     }
 
     // Инициализация графика
@@ -472,14 +477,18 @@ class ChartManager {
             this.candleCount = data.length;
             if (data.length > 0) {
                 this.lastCandle = data[data.length - 1];
+                // 🎯 Сохраняем последнюю историческую свечу для умной валидации
+                this.lastHistoricalCandle = { ...this.lastCandle };
+                
                 // 🛡️ Устанавливаем basePrice для валидации (используем среднюю цену из первых свечей)
                 const firstCandles = data.slice(0, Math.min(100, data.length));
                 const avgPrice = firstCandles.reduce((sum, c) => sum + c.close, 0) / firstCandles.length;
                 this.basePrice = avgPrice;
                 
-                window.errorLogger?.info('chart', 'Base price set for validation', {
+                window.errorLogger?.info('chart', 'Base price and lastHistoricalCandle set', {
                     symbol,
                     basePrice: this.basePrice,
+                    lastHistoricalCandle: this.lastHistoricalCandle,
                     maxAllowedRange: (this.basePrice * this.MAX_CANDLE_RANGE_PERCENT).toFixed(4)
                 });
             }
@@ -750,9 +759,21 @@ class ChartManager {
         }
         
         // 🔥 ГЛАВНАЯ ПРОВЕРКА: Размах свечи
-        if (this.basePrice) {
+        // 🎯 УМНАЯ ВАЛИДАЦИЯ: Если basePrice не установлен - используем lastHistoricalCandle
+        let validationBasePrice = this.basePrice;
+        
+        if (!validationBasePrice && this.lastHistoricalCandle) {
+            validationBasePrice = this.lastHistoricalCandle.close;
+            window.errorLogger?.debug('validation', 'Using lastHistoricalCandle for validation', {
+                symbol: this.symbol,
+                validationBasePrice,
+                context
+            });
+        }
+        
+        if (validationBasePrice) {
             const candleRange = candle.high - candle.low;
-            const rangePercent = (candleRange / this.basePrice);
+            const rangePercent = (candleRange / validationBasePrice);
             
             if (rangePercent > this.MAX_CANDLE_RANGE_PERCENT) {
                 window.errorLogger?.error('validation', '🚨 ANOMALY DETECTED: Candle range too large!', {
@@ -761,7 +782,8 @@ class ChartManager {
                     candleRange,
                     rangePercent: (rangePercent * 100).toFixed(2) + '%',
                     maxAllowed: (this.MAX_CANDLE_RANGE_PERCENT * 100).toFixed(2) + '%',
-                    basePrice: this.basePrice,
+                    validationBasePrice,
+                    usedLastHistorical: !this.basePrice,
                     symbol: this.symbol
                 });
                 
@@ -774,6 +796,12 @@ class ChartManager {
                     maxAllowed: this.MAX_CANDLE_RANGE_PERCENT
                 };
             }
+        } else {
+            // Нет basePrice и нет lastHistoricalCandle - первичная инициализация
+            window.errorLogger?.warn('validation', 'No basePrice or lastHistoricalCandle available - skipping range check', {
+                symbol: this.symbol,
+                context
+            });
         }
         
         // Все проверки пройдены
@@ -788,6 +816,24 @@ class ChartManager {
             return;
         }
         
+        // 🛡️ БЛОКИРОВКА: Если идет инициализация актива - добавляем тик в очередь
+        if (this.isInitializingSymbol && !isNewCandle) {
+            window.errorLogger?.debug('chart', '🔒 Symbol initializing - queueing tick', {
+                symbol: this.symbol,
+                tickTime: candle.time,
+                queueSize: this.pendingTicks.length
+            });
+            
+            this.pendingTicks.push({ candle, isNewCandle });
+            
+            // Ограничиваем размер очереди (только последние 5 тиков)
+            if (this.pendingTicks.length > 5) {
+                this.pendingTicks = this.pendingTicks.slice(-5);
+            }
+            
+            return; // НЕ ОБРАБАТЫВАЕМ тик во время инициализации
+        }
+        
         // 🐛 DEBUG MODE: Детальное логирование первых тиков после смены актива
         if (this.changeSymbolDebugMode) {
             window.errorLogger?.debug('chart-debug', 'Tick received in debug mode', {
@@ -797,24 +843,28 @@ class ChartManager {
                 lastCandle: this.lastCandle,
                 currentInterpolatedCandle: this.currentInterpolatedCandle,
                 isFirstTickAfterChange: this.isFirstTickAfterChange,
-                basePrice: this.basePrice
+                basePrice: this.basePrice,
+                isInitializingSymbol: this.isInitializingSymbol
             });
         }
         
         // 🛡️ ВАЛИДАЦИЯ: Проверяем свечу на аномалии
         const validation = this.validateCandle(candle, isNewCandle ? 'newCandle' : 'tick');
         if (!validation.valid) {
-            window.errorLogger?.error('chart', 'Candle validation failed - skipping update', {
+            window.errorLogger?.error('chart', '🚨 Candle validation failed - REJECTING', {
                 reason: validation.reason,
                 candle,
-                isNewCandle
+                isNewCandle,
+                symbol: this.symbol
             });
             
-            // Если это аномалия из-за размаха - используем последнюю валидную свечу
-            if (validation.reason === 'Anomalous range' && this.lastCandle) {
-                window.errorLogger?.warn('chart', 'Using last valid candle instead', {
-                    lastCandle: this.lastCandle
-                });
+            // Если это аномалия из-за размаха - ОТКЛОНЯЕМ и запускаем очистку
+            if (validation.reason === 'Anomalous range') {
+                console.error(`🚨 ANOMALOUS CANDLE REJECTED: ${this.symbol}`, candle);
+                
+                // 🛡️ FALLBACK: Проверяем и очищаем график от аномалий
+                this.cleanAnomalousCandles();
+                
                 // Не обновляем график, оставляем последнее валидное состояние
                 return;
             }
@@ -1622,6 +1672,14 @@ class ChartManager {
             }
         });
         
+        // 🛡️ БЛОКИРОВКА ТИКОВ: Устанавливаем флаг инициализации
+        this.isInitializingSymbol = true;
+        this.pendingTicks = []; // Очищаем очередь тиков
+        
+        window.errorLogger?.info('chart', '🔒 Ticks blocked during initialization', {
+            symbol: newSymbol
+        });
+        
         // 🐛 DEBUG MODE: Включаем на 30 секунд для детального логирования
         this.changeSymbolDebugMode = true;
         if (this.changeSymbolDebugTimer) {
@@ -1632,13 +1690,16 @@ class ChartManager {
             window.errorLogger?.info('chart', 'Debug mode disabled after 30 seconds');
         }, 30000);
 
-        // 🎯 Останавливаем интерполяцию при смене символа
+        // 🎯 Останавливаем интерполяцию при смене символа СИНХРОННО
         if (this.animationFrameId) {
             cancelAnimationFrame(this.animationFrameId);
             this.animationFrameId = null;
         }
+        // КРИТИЧЕСКИ ВАЖНО: Полная синхронная очистка состояния интерполяции
         this.currentInterpolatedCandle = null;
         this.targetCandle = null;
+        this.interpolationStartTime = null;
+        this.lastTickTime = 0;
         
         // Останавливаем начальную анимацию если она запущена
         if (this.initialAnimationTimer) {
@@ -1674,6 +1735,7 @@ class ChartManager {
         this.lastCandle = null;
         this.currentCandleByTimeframe = null;
         this.basePrice = null; // Сбрасываем basePrice
+        this.lastHistoricalCandle = null; // Сбрасываем lastHistoricalCandle
         
         // Очищаем сет обработанных свечей
         this.processedCandles.clear();
@@ -1682,6 +1744,13 @@ class ChartManager {
 
         // Загружаем данные
         await this.loadHistoricalData(newSymbol);
+        
+        // 🎯 КРИТИЧЕСКИ ВАЖНО: basePrice и lastHistoricalCandle теперь установлены
+        window.errorLogger?.info('chart', '✅ Historical data loaded, validation ready', {
+            symbol: newSymbol,
+            basePrice: this.basePrice,
+            lastHistoricalCandle: this.lastHistoricalCandle
+        });
         
         window.errorLogger?.info('chart', 'Historical data loaded', { 
             symbol: newSymbol,
@@ -1754,12 +1823,42 @@ class ChartManager {
         // ИСПРАВЛЕНИЕ: Линия цены теперь создается сразу после loadHistoricalData
         // Не нужна дополнительная задержка - уже создано выше
         
+        // 🛡️ РАЗБЛОКИРОВКА ТИКОВ: Инициализация завершена
+        this.isInitializingSymbol = false;
+        
+        window.errorLogger?.info('chart', '🔓 Ticks unblocked - initialization complete', {
+            symbol: newSymbol,
+            pendingTicksCount: this.pendingTicks.length
+        });
+        
+        // Обрабатываем накопленные тики (только последний)
+        if (this.pendingTicks.length > 0) {
+            const latestTick = this.pendingTicks[this.pendingTicks.length - 1];
+            
+            window.errorLogger?.info('chart', 'Applying latest pending tick', {
+                symbol: newSymbol,
+                tickTime: latestTick.candle.time,
+                totalPending: this.pendingTicks.length
+            });
+            
+            // Применяем последний тик напрямую
+            this.applyTickDirectly(latestTick.candle, latestTick.isNewCandle);
+            
+            // Обновляем lastCandle
+            this.lastCandle = latestTick.candle;
+            this.currentInterpolatedCandle = { ...latestTick.candle };
+        }
+        
+        // Очищаем очередь
+        this.pendingTicks = [];
+        
         window.errorLogger?.info('chart', '✅ SYMBOL CHANGE COMPLETED', { 
             symbol: newSymbol,
             candleCount: this.candleCount,
             lastCandle: this.lastCandle,
             isFirstTickAfterChange: this.isFirstTickAfterChange,
-            debugMode: this.changeSymbolDebugMode
+            debugMode: this.changeSymbolDebugMode,
+            isInitializingSymbol: this.isInitializingSymbol
         });
         console.log(`Chart switched to ${newSymbol} with ${this.candleCount} candles`);
     }
@@ -1866,6 +1965,91 @@ class ChartManager {
             case 'candles':
             default:
                 return this.candleSeries;
+        }
+    }
+
+    // 🛡️ FALLBACK: Очистка аномальных свечей из графика
+    cleanAnomalousCandles() {
+        const activeSeries = this.getActiveSeries();
+        if (!activeSeries) {
+            window.errorLogger?.warn('cleanup', 'No active series for cleanup');
+            return;
+        }
+        
+        try {
+            // Получаем все свечи из графика
+            const allCandles = activeSeries.data();
+            
+            if (!allCandles || allCandles.length === 0) {
+                window.errorLogger?.debug('cleanup', 'No candles to clean');
+                return;
+            }
+            
+            // Фильтруем аномальные свечи
+            const cleanedCandles = [];
+            let removedCount = 0;
+            
+            for (const candle of allCandles) {
+                const validation = this.validateCandle(candle, 'cleanup');
+                
+                if (validation.valid) {
+                    cleanedCandles.push(candle);
+                } else {
+                    removedCount++;
+                    window.errorLogger?.warn('cleanup', 'Removing anomalous candle', {
+                        symbol: this.symbol,
+                        candle,
+                        reason: validation.reason
+                    });
+                    console.warn(`🧹 Removing anomalous candle: time=${candle.time}, reason=${validation.reason}`);
+                }
+            }
+            
+            // Если нашли аномалии - обновляем график
+            if (removedCount > 0) {
+                window.errorLogger?.info('cleanup', '🧹 Cleaning anomalous candles from chart', {
+                    symbol: this.symbol,
+                    totalCandles: allCandles.length,
+                    removedCount,
+                    cleanedCount: cleanedCandles.length
+                });
+                
+                console.log(`🧹 Cleaned ${removedCount} anomalous candles from ${this.symbol}`);
+                
+                // Применяем очищенные данные
+                activeSeries.setData(cleanedCandles);
+                
+                // Обновляем candleCount и lastCandle
+                this.candleCount = cleanedCandles.length;
+                if (cleanedCandles.length > 0) {
+                    this.lastCandle = cleanedCandles[cleanedCandles.length - 1];
+                    this.currentInterpolatedCandle = { ...this.lastCandle };
+                }
+                
+                // Также очищаем объемы
+                const allVolumes = this.volumeSeries.data();
+                if (allVolumes && allVolumes.length > 0) {
+                    // Фильтруем объемы по времени очищенных свечей
+                    const cleanedTimes = new Set(cleanedCandles.map(c => c.time));
+                    const cleanedVolumes = allVolumes.filter(v => cleanedTimes.has(v.time));
+                    this.volumeSeries.setData(cleanedVolumes);
+                }
+                
+                window.errorLogger?.info('cleanup', '✅ Chart cleanup completed', {
+                    symbol: this.symbol,
+                    newCandleCount: this.candleCount,
+                    lastCandle: this.lastCandle
+                });
+            } else {
+                window.errorLogger?.debug('cleanup', 'No anomalous candles found');
+            }
+        } catch (error) {
+            window.errorLogger?.error('cleanup', 'Error during cleanup', {
+                symbol: this.symbol,
+                error: error.message,
+                stack: error.stack
+            });
+            console.error('Error cleaning anomalous candles:', error);
         }
     }
 

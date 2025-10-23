@@ -444,6 +444,18 @@ setInterval(() => {
       
       const updatedCandle = generator.generateCandleTick();
       
+      // 🛡️ ВАЛИДАЦИЯ: Проверяем свечу на аномалии перед отправкой
+      const validation = generator.validateCandleAnomaly(updatedCandle, 'websocket-tick');
+      if (!validation.valid) {
+        logger.error('websocket', '🚨 TICK VALIDATION FAILED - skipping send', {
+          symbol: symbol,
+          reason: validation.reason,
+          candle: updatedCandle
+        });
+        console.error(`🚨 Tick validation failed for ${symbol}:`, validation.reason);
+        return; // НЕ ОТПРАВЛЯЕМ аномальный тик
+      }
+      
       // Дополнительная проверка: убедимся что время - это число
       if (typeof updatedCandle.time !== 'number' || isNaN(updatedCandle.time)) {
         logger.error('websocket', 'Invalid tick time format', { 
@@ -520,6 +532,21 @@ function createNewCandlesForAllSymbols() {
     }
     
     const newCandle = generator.generateNextCandle();
+    
+    // 🛡️ ВАЛИДАЦИЯ: Проверяем новую свечу на аномалии перед отправкой
+    const validation = generator.validateCandleAnomaly(newCandle, 'websocket-newCandle');
+    if (!validation.valid) {
+      logger.error('websocket', '🚨 NEW CANDLE VALIDATION FAILED - skipping send', {
+        symbol: symbol,
+        reason: validation.reason,
+        candle: newCandle
+      });
+      console.error(`🚨 New candle validation failed for ${symbol}:`, validation.reason);
+      
+      // НЕ ОТПРАВЛЯЕМ аномальную свечу клиентам, но она уже в массиве generator.candles
+      // Это нормально - генератор продолжит работать, клиенты не получат аномалию
+      return;
+    }
     
     // Отправляем клиентам ТОЛЬКО если есть подписчики
     const clients = subscriptions.get(symbol);
