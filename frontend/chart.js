@@ -55,6 +55,12 @@ class ChartManager {
         // Линия цены для отображения текущей цены справа на оси Y
         this.currentPrice = null; // текущая цена
         this.expirationPriceLine = null; // PriceLine для отображения линии и цены справа (на оси Y)
+        
+        // 🚀 PAGE VISIBILITY: Оптимизация работы на неактивных вкладках
+        this.isPageVisible = !document.hidden; // флаг видимости страницы
+        this.tickQueue = []; // очередь тиков на скрытой вкладке
+        this.lastVisibleTime = Date.now(); // время последнего нахождения на видимой вкладке
+        this.IDLE_THRESHOLD = 1000; // порог простоя (1 сек) - пропускать интерполяцию если больше
     }
 
     // Инициализация графика
@@ -298,13 +304,125 @@ class ChartManager {
             }
         });
 
+        // 🚀 Инициализируем отслеживание видимости страницы
+        this.initPageVisibilityTracking();
+
         this.isInitialized = true;
         window.errorLogger?.info('chart', 'Chart initialized successfully', {
             width: width,
             height: height,
-            rightOffset: 12
+            rightOffset: 12,
+            pageVisible: this.isPageVisible
         });
         console.log('Chart initialized');
+    }
+
+    // 🚀 Инициализация отслеживания видимости страницы
+    // Используем visibilitychange (основной) + focus/blur (запасной) для надежности
+    initPageVisibilityTracking() {
+        // Обработчик изменения видимости страницы
+        const handleVisibilityChange = () => {
+            const wasVisible = this.isPageVisible;
+            this.isPageVisible = document.visibilityState === 'visible';
+            
+            window.errorLogger?.info('visibility', 'Page visibility changed', {
+                from: wasVisible ? 'visible' : 'hidden',
+                to: this.isPageVisible ? 'visible' : 'hidden',
+                visibilityState: document.visibilityState
+            });
+            
+            if (!this.isPageVisible) {
+                // Страница скрыта - останавливаем RAF
+                this.handlePageHidden();
+            } else if (wasVisible === false && this.isPageVisible) {
+                // Страница стала видимой - возобновляем
+                this.handlePageVisible();
+            }
+        };
+        
+        // Обработчик потери фокуса (запасной механизм)
+        const handleBlur = () => {
+            // Проверяем действительно ли страница скрыта
+            if (document.visibilityState === 'hidden' && this.isPageVisible) {
+                window.errorLogger?.debug('visibility', 'Blur event - page is hidden');
+                this.isPageVisible = false;
+                this.handlePageHidden();
+            }
+        };
+        
+        // Обработчик получения фокуса (запасной механизм)
+        const handleFocus = () => {
+            if (document.visibilityState === 'visible' && !this.isPageVisible) {
+                window.errorLogger?.debug('visibility', 'Focus event - page is visible');
+                this.isPageVisible = true;
+                this.handlePageVisible();
+            }
+        };
+        
+        // Регистрируем обработчики
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+        window.addEventListener('blur', handleBlur);
+        window.addEventListener('focus', handleFocus);
+        
+        // Сохраняем ссылки для очистки
+        this.visibilityHandlers = {
+            visibilitychange: handleVisibilityChange,
+            blur: handleBlur,
+            focus: handleFocus
+        };
+        
+        window.errorLogger?.info('visibility', 'Page visibility tracking initialized', {
+            initialState: this.isPageVisible ? 'visible' : 'hidden'
+        });
+        console.log('📱 Page visibility tracking enabled');
+    }
+    
+    // Обработка скрытия страницы
+    handlePageHidden() {
+        window.errorLogger?.info('visibility', 'Page hidden - stopping RAF, clearing queue', {
+            tickQueueSize: this.tickQueue.length,
+            animationActive: !!this.animationFrameId
+        });
+        
+        // Останавливаем requestAnimationFrame
+        if (this.animationFrameId) {
+            cancelAnimationFrame(this.animationFrameId);
+            this.animationFrameId = null;
+            window.errorLogger?.debug('visibility', 'RAF cancelled');
+        }
+        
+        // Очищаем очередь тиков (старые данные больше не актуальны)
+        this.tickQueue = [];
+        
+        console.log('📴 Chart animations paused (page hidden)');
+    }
+    
+    // Обработка возврата на страницу
+    handlePageVisible() {
+        this.lastVisibleTime = Date.now();
+        
+        window.errorLogger?.info('visibility', 'Page visible - resuming normal operation', {
+            tickQueueSize: this.tickQueue.length
+        });
+        
+        // Применяем накопленные изменения (если есть)
+        if (this.tickQueue.length > 0) {
+            // Применяем только последнее состояние (остальное устарело)
+            const latestTick = this.tickQueue[this.tickQueue.length - 1];
+            
+            window.errorLogger?.debug('visibility', 'Applying queued ticks', {
+                queueSize: this.tickQueue.length,
+                applied: 'latest only'
+            });
+            
+            // Применяем напрямую без интерполяции (прошло время)
+            this.applyTickDirectly(latestTick.candle, latestTick.isNewCandle);
+            
+            // Очищаем очередь
+            this.tickQueue = [];
+        }
+        
+        console.log('✅ Chart animations resumed (page visible)');
     }
 
     // Загрузка исторических данных
@@ -712,13 +830,44 @@ class ChartManager {
         // РЕШЕНИЕ #3: Отслеживаем успешность добавления свечи
         let actuallyAddedNewCandle = false;
         
-        // 🎯 ИНТЕРПОЛЯЦИЯ: Для тиков используем плавную анимацию (только для Candles/Bars)
+        // 🚀 PAGE VISIBILITY: Проверяем видимость страницы для тиков
         if (!isNewCandle && this.interpolationEnabled && this.lastCandle && this.chartType !== 'line') {
-            // Это тик - запускаем интерполяцию от текущей свечи к новому состоянию
+            // Это тик (обновление текущей свечи)
+            
+            if (!this.isPageVisible) {
+                // ❌ Страница скрыта - добавляем в очередь, применяем напрямую БЕЗ RAF
+                this.tickQueue.push({ candle, isNewCandle });
+                
+                // Применяем только последний тик (остальные устарели)
+                const latestCandle = this.tickQueue[this.tickQueue.length - 1].candle;
+                this.applyTickDirectly(latestCandle, false);
+                
+                this.lastCandle = candle;
+                return;
+            }
+            
+            // ✅ Страница видима - проверяем время простоя
+            const timeSinceLastVisible = now - this.lastVisibleTime;
+            
+            if (timeSinceLastVisible > this.IDLE_THRESHOLD) {
+                // Прошло много времени - пропускаем интерполяцию, применяем напрямую
+                window.errorLogger?.debug('interpolation', 'Skipping interpolation due to idle time', {
+                    idleTime: timeSinceLastVisible,
+                    threshold: this.IDLE_THRESHOLD
+                });
+                
+                this.applyTickDirectly(candle, false);
+                this.lastCandle = candle;
+                this.lastVisibleTime = now;
+                return;
+            }
+            
+            // ✅ Все ОК - запускаем интерполяцию с RAF
             const fromCandle = this.currentInterpolatedCandle || this.lastCandle;
             this.startInterpolation(fromCandle, candle);
             this.lastCandle = candle;
             this.lastTickTime = now;
+            this.lastVisibleTime = now;
             return; // Интерполяция сама обновит график через requestAnimationFrame
         }
         
@@ -1237,6 +1386,42 @@ class ChartManager {
         return start + (end - start) * t;
     }
     
+    // 🚀 Прямое обновление свечи БЕЗ интерполяции (для скрытой вкладки)
+    applyTickDirectly(candle, isNewCandle) {
+        const activeSeries = this.getActiveSeries();
+        if (!activeSeries || !this.volumeSeries) {
+            return;
+        }
+        
+        try {
+            // Обновляем график напрямую
+            activeSeries.update(candle);
+            
+            this.volumeSeries.update({
+                time: candle.time,
+                value: candle.volume,
+                color: candle.close >= candle.open ? '#26d07c80' : '#ff475780'
+            });
+            
+            // Обновляем отображение цены
+            this.updatePriceDisplay(candle.close);
+            
+            // Обновляем интерполированное состояние (для плавного возобновления)
+            this.currentInterpolatedCandle = { ...candle };
+            
+            window.errorLogger?.debug('chart', 'Tick applied directly (no interpolation)', {
+                time: candle.time,
+                close: candle.close,
+                isNewCandle: isNewCandle
+            });
+        } catch (error) {
+            window.errorLogger?.error('chart', 'Error applying tick directly', {
+                error: error.message,
+                candle: candle
+            });
+        }
+    }
+    
     // НОВОЕ: Микро-симуляция движения цены до получения первого реального тика
     // Это решает проблему "замерзшей" синей линии при смене актива
     startInitialPriceAnimation() {
@@ -1495,6 +1680,18 @@ class ChartManager {
         
         // Удаляем линию цены
         this.removeExpirationOverlay();
+        
+        // 🚀 Удаляем обработчики visibility
+        if (this.visibilityHandlers) {
+            document.removeEventListener('visibilitychange', this.visibilityHandlers.visibilitychange);
+            window.removeEventListener('blur', this.visibilityHandlers.blur);
+            window.removeEventListener('focus', this.visibilityHandlers.focus);
+            this.visibilityHandlers = null;
+            window.errorLogger?.info('visibility', 'Page visibility handlers removed');
+        }
+        
+        // Очищаем очередь тиков
+        this.tickQueue = [];
         
         // Полностью очищаем WebSocket
         this.closeWebSocket();
