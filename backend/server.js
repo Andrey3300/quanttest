@@ -288,6 +288,52 @@ app.get('/api/chart/history', (req, res) => {
   }
 });
 
+// 🎯 НОВЫЙ ENDPOINT: Получение текущего состояния свечи (для синхронизации при смене актива)
+app.get('/api/chart/current-state/:symbol', (req, res) => {
+  try {
+    const symbol = req.params.symbol;
+    
+    if (!symbol) {
+      return res.status(400).json({ error: 'Symbol is required' });
+    }
+    
+    const generator = getGenerator(symbol);
+    
+    // Проверяем что генератор инициализирован
+    if (!generator.candles || generator.candles.length === 0) {
+      logger.warn('api', 'Generator not initialized for current-state request', { symbol });
+      return res.status(503).json({ error: 'Generator not ready yet' });
+    }
+    
+    // Получаем последнюю свечу и текущее состояние
+    const lastCandle = generator.candles[generator.candles.length - 1];
+    const currentState = generator.currentCandleState || lastCandle;
+    
+    logger.debug('api', 'Current state requested', {
+      symbol,
+      lastCandleTime: lastCandle.time,
+      currentStateTime: currentState.time,
+      currentPrice: generator.currentPrice
+    });
+    
+    res.json({
+      symbol,
+      lastCandle,
+      currentState,
+      currentPrice: generator.currentPrice,
+      candleCount: generator.candles.length,
+      timestamp: Date.now()
+    });
+  } catch (error) {
+    console.error('Current state error:', error);
+    logger.error('api', 'Failed to get current state', {
+      symbol: req.params.symbol,
+      error: error.message
+    });
+    res.status(500).json({ error: 'Failed to fetch current state' });
+  }
+});
+
 // ===== ИНИЦИАЛИЗАЦИЯ ГЕНЕРАТОРОВ 24/7 =====
 
 // Инициализируем ВСЕ генераторы при старте сервера
