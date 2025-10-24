@@ -565,11 +565,24 @@ function createNewCandlesForAllSymbols() {
       return;
     }
     
-    // КРИТИЧЕСКАЯ ВАЛИДАЦИЯ: Проверяем непрерывность перед отправкой
+    // 🛡️ КРИТИЧЕСКАЯ ВАЛИДАЦИЯ: Проверяем timestamp и непрерывность перед отправкой
     const allCandles = generator.candles;
     if (allCandles.length >= 2) {
       const previousCandle = allCandles[allCandles.length - 2]; // Предпоследняя свеча
       const currentCandle = allCandles[allCandles.length - 1];  // Последняя свеча (новая)
+      
+      // 🚨 КРИТИЧНО: Проверяем что timestamp строго больше предыдущего
+      if (currentCandle.time <= previousCandle.time) {
+        logger.error('websocket', '🚨 DUPLICATE TIMESTAMP DETECTED - skipping send!', {
+          symbol: symbol,
+          previousTime: previousCandle.time,
+          currentTime: currentCandle.time,
+          previousTimeISO: new Date(previousCandle.time * 1000).toISOString(),
+          currentTimeISO: new Date(currentCandle.time * 1000).toISOString()
+        });
+        console.error(`🚨 DUPLICATE TIMESTAMP for ${symbol}: current=${currentCandle.time} <= previous=${previousCandle.time}`);
+        return; // НЕ ОТПРАВЛЯЕМ свечу с дубликатом времени
+      }
       
       // Используем небольшой порог для учета погрешности округления
       const epsilon = 0.0000001;

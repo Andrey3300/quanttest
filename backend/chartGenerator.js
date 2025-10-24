@@ -479,7 +479,7 @@ class ChartGenerator {
             return this.generateNextCandle();
         }
         
-        // ЗАЩИТА: Проверяем что currentCandleState синхронизирован с последней свечой
+        // 🛡️ УСИЛЕННАЯ ЗАЩИТА: Проверяем что currentCandleState синхронизирован с последней свечой
         if (this.candles.length > 0) {
             const lastCandle = this.candles[this.candles.length - 1];
             if (this.currentCandleState.time !== lastCandle.time) {
@@ -504,6 +504,10 @@ class ChartGenerator {
             }
         }
         
+        // 🛡️ КРИТИЧЕСКАЯ ЗАЩИТА: Ограничиваем максимальное изменение цены за тик
+        // Это предотвращает огромные свечи из-за аномалий генерации
+        const MAX_TICK_CHANGE_PERCENT = 0.002; // 0.2% максимум за один тик
+        
         const precision = this.getPricePrecision(this.basePrice);
         
         // Генерируем небольшое изменение цены для плавности
@@ -518,14 +522,23 @@ class ChartGenerator {
         // Новая целевая цена close
         let newTargetClose = this.currentCandleState.targetClose * (1 + priceChange);
         
-        // Ограничиваем изменение в пределах разумного
-        const maxChange = this.basePrice * 0.001; // 0.1% за тик
+        // 🛡️ УСИЛЕННОЕ ОГРАНИЧЕНИЕ: Два уровня защиты от аномалий
+        // Уровень 1: Ограничение относительно текущей цены (0.2% за тик)
+        const MAX_TICK_CHANGE_PERCENT = 0.002;
+        const maxTickChange = this.currentCandleState.targetClose * MAX_TICK_CHANGE_PERCENT;
+        newTargetClose = Math.max(
+            this.currentCandleState.targetClose - maxTickChange,
+            Math.min(this.currentCandleState.targetClose + maxTickChange, newTargetClose)
+        );
+        
+        // Уровень 2: Ограничение относительно basePrice (0.1% от базы)
+        const maxChange = this.basePrice * 0.001;
         newTargetClose = Math.max(
             this.currentCandleState.targetClose - maxChange,
             Math.min(this.currentCandleState.targetClose + maxChange, newTargetClose)
         );
         
-        // Убедимся что цена в разумных пределах
+        // Уровень 3: Глобальные границы (±10% от basePrice)
         newTargetClose = Math.max(newTargetClose, this.basePrice * 0.9);
         newTargetClose = Math.min(newTargetClose, this.basePrice * 1.1);
         
@@ -536,7 +549,7 @@ class ChartGenerator {
         // Обновляем currentPrice для следующей свечи
         this.currentPrice = this.currentCandleState.close;
         
-        // Обновляем high и low правильно
+        // 🛡️ УСИЛЕННАЯ ВАЛИДАЦИЯ: Обновляем high и low с дополнительными проверками
         if (this.currentCandleState.close > this.currentCandleState.high) {
             this.currentCandleState.high = this.currentCandleState.close;
             this.currentCandleState.targetHigh = this.currentCandleState.close;
@@ -544,7 +557,14 @@ class ChartGenerator {
             // 📏 Редкие и короткие фитили для компактного вида как на бинарных опционах
             if (Math.random() < 0.015) { // уменьшено с 4% до 1.5%
                 const wickHigh = this.currentCandleState.close * (1 + Math.abs(this.randomNormal(0, microVolatility * 0.08))); // уменьшено с 0.2 до 0.08
-                if (wickHigh > this.currentCandleState.high && wickHigh <= this.basePrice * 1.1) {
+                
+                // 🛡️ ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: Фитиль не должен быть больше MAX_CANDLE_RANGE_PERCENT
+                const potentialRange = wickHigh - this.currentCandleState.low;
+                const rangePercent = potentialRange / this.basePrice;
+                
+                if (wickHigh > this.currentCandleState.high && 
+                    wickHigh <= this.basePrice * 1.1 &&
+                    rangePercent <= this.MAX_CANDLE_RANGE_PERCENT) {
                     this.currentCandleState.high = parseFloat(wickHigh.toFixed(precision));
                     this.currentCandleState.targetHigh = wickHigh;
                 }
@@ -558,7 +578,14 @@ class ChartGenerator {
             // 📏 Редкие и короткие фитили для компактного вида как на бинарных опционах
             if (Math.random() < 0.015) { // уменьшено с 4% до 1.5%
                 const wickLow = this.currentCandleState.close * (1 - Math.abs(this.randomNormal(0, microVolatility * 0.08))); // уменьшено с 0.2 до 0.08
-                if (wickLow < this.currentCandleState.low && wickLow >= this.basePrice * 0.9) {
+                
+                // 🛡️ ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: Фитиль не должен быть больше MAX_CANDLE_RANGE_PERCENT
+                const potentialRange = this.currentCandleState.high - wickLow;
+                const rangePercent = potentialRange / this.basePrice;
+                
+                if (wickLow < this.currentCandleState.low && 
+                    wickLow >= this.basePrice * 0.9 &&
+                    rangePercent <= this.MAX_CANDLE_RANGE_PERCENT) {
                     this.currentCandleState.low = parseFloat(wickLow.toFixed(precision));
                     this.currentCandleState.targetLow = wickLow;
                 }
@@ -589,7 +616,7 @@ class ChartGenerator {
             volume: this.currentCandleState.volume
         };
         
-        // Валидация: все значения должны быть числами
+        // 🛡️ УСИЛЕННАЯ ВАЛИДАЦИЯ: все значения должны быть числами
         if (typeof tickCandle.time !== 'number' || isNaN(tickCandle.time) ||
             typeof tickCandle.open !== 'number' || isNaN(tickCandle.open) ||
             typeof tickCandle.high !== 'number' || isNaN(tickCandle.high) ||
@@ -608,6 +635,26 @@ class ChartGenerator {
                 low: this.currentCandleState.low || this.basePrice,
                 close: this.currentCandleState.close || this.basePrice,
                 volume: this.currentCandleState.volume || 1000
+            };
+        }
+        
+        // 🛡️ ФИНАЛЬНАЯ ВАЛИДАЦИЯ ТИКА: Проверяем на аномалии перед возвратом
+        const tickValidation = this.validateCandleAnomaly(tickCandle, 'generateCandleTick');
+        if (!tickValidation.valid) {
+            logger.warn('candle', 'Tick validation failed - returning safe state', {
+                symbol: this.symbol,
+                reason: tickValidation.reason,
+                tickCandle: tickCandle
+            });
+            
+            // Возвращаем безопасное состояние без аномалии
+            return {
+                time: this.currentCandleState.time,
+                open: this.currentCandleState.open,
+                high: Math.max(this.currentCandleState.open, this.currentCandleState.close),
+                low: Math.min(this.currentCandleState.open, this.currentCandleState.close),
+                close: this.currentCandleState.close,
+                volume: this.currentCandleState.volume
             };
         }
         
