@@ -350,7 +350,7 @@ const wss = new WebSocket.Server({ server, path: '/ws/chart' });
 const subscriptions = new Map(); // symbol -> Set of WebSocket connections
 
 wss.on('connection', (ws, req) => {
-  console.log('New WebSocket connection');
+  logger.debug('websocket', 'New WebSocket connection');
   
   let currentSymbol = null;
   
@@ -364,7 +364,7 @@ wss.on('connection', (ws, req) => {
         // Отписываемся от предыдущего символа
         if (currentSymbol && subscriptions.has(currentSymbol)) {
           subscriptions.get(currentSymbol).delete(ws);
-          console.log(`Client unsubscribed from ${currentSymbol} (auto)`);
+          logger.debug('websocket', `Client unsubscribed from ${currentSymbol} (auto)`);
         }
         
         // Подписываемся на новый символ
@@ -374,7 +374,7 @@ wss.on('connection', (ws, req) => {
         }
         subscriptions.get(symbol).add(ws);
         
-        console.log(`Client subscribed to ${symbol}`);
+        logger.debug('websocket', `Client subscribed to ${symbol}`);
         
         // Отправляем подтверждение
         ws.send(JSON.stringify({
@@ -390,7 +390,7 @@ wss.on('connection', (ws, req) => {
         
         if (symbol && subscriptions.has(symbol)) {
           subscriptions.get(symbol).delete(ws);
-          console.log(`Client explicitly unsubscribed from ${symbol}`);
+          logger.debug('websocket', `Client explicitly unsubscribed from ${symbol}`);
           
           // Отправляем подтверждение
           ws.send(JSON.stringify({
@@ -413,7 +413,7 @@ wss.on('connection', (ws, req) => {
     if (currentSymbol && subscriptions.has(currentSymbol)) {
       subscriptions.get(currentSymbol).delete(ws);
     }
-    console.log('WebSocket connection closed');
+    logger.debug('websocket', 'WebSocket connection closed');
   });
   
   ws.on('error', (error) => {
@@ -452,7 +452,6 @@ setInterval(() => {
           reason: validation.reason,
           candle: updatedCandle
         });
-        console.error(`🚨 Tick validation failed for ${symbol}:`, validation.reason);
         return; // НЕ ОТПРАВЛЯЕМ аномальный тик
       }
       
@@ -462,7 +461,6 @@ setInterval(() => {
           symbol: symbol,
           candle: updatedCandle
         });
-        console.error('Invalid tick time format:', updatedCandle.time);
         return;
       }
       
@@ -541,8 +539,6 @@ function createNewCandlesForAllSymbols() {
         reason: validation.reason,
         candle: newCandle
       });
-      console.error(`🚨 New candle validation failed for ${symbol}:`, validation.reason);
-      
       // НЕ ОТПРАВЛЯЕМ аномальную свечу клиентам, но она уже в массиве generator.candles
       // Это нормально - генератор продолжит работать, клиенты не получат аномалию
       return;
@@ -566,7 +562,6 @@ function createNewCandlesForAllSymbols() {
         symbol: symbol,
         candle: newCandle
       });
-      console.error('Invalid new candle time format:', newCandle.time);
       return;
     }
     
@@ -636,7 +631,6 @@ function createNewCandlesForAllSymbols() {
         symbol: symbol,
         candle: newCandle
       });
-      console.error('Invalid OHLC data:', newCandle);
       return;
     }
     
@@ -661,7 +655,7 @@ function createNewCandlesForAllSymbols() {
       time: newCandle.time,
       clientCount: sentCount
     });
-    console.log(`New candle created for ${symbol} at time ${newCandle.time} (${sentCount} clients)`);
+    // Убран спам в консоль - детали в логе
   });
   
   // ИСПРАВЛЕНИЕ: Уменьшаем задержку до 200ms для более точного тайминга
