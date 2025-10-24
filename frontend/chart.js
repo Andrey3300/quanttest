@@ -43,7 +43,7 @@ class ChartManager {
         this.isRestoringRange = false; // флаг восстановления диапазона
         
         // 🎯 ИНТЕРПОЛЯЦИЯ ДЛЯ ПЛАВНОСТИ (smooth transitions between ticks)
-        this.interpolationEnabled = true; // включить/выключить интерполяцию
+        this.interpolationEnabled = false; // ВРЕМЕННО ОТКЛЮЧЕНО ДЛЯ ПРОВЕРКИ ГИПОТЕЗЫ
         this.targetCandle = null; // целевое состояние свечи (куда движемся)
         this.currentInterpolatedCandle = null; // текущее интерполированное состояние
         this.interpolationStartTime = null; // время начала интерполяции
@@ -75,6 +75,10 @@ class ChartManager {
         this.isInitializingSymbol = false; // Флаг инициализации актива
         this.pendingTicks = []; // Очередь тиков полученных во время инициализации
         this.lastHistoricalCandle = null; // Последняя историческая свеча для умной валидации
+        
+        // 🔍 ДИАГНОСТИКА: Счётчик тиков для отладки
+        this.tickCounter = 0;
+        this.newCandleCounter = 0;
     }
 
     // Инициализация графика
@@ -326,9 +330,11 @@ class ChartManager {
             width: width,
             height: height,
             rightOffset: 12,
-            pageVisible: this.isPageVisible
+            pageVisible: this.isPageVisible,
+            interpolationEnabled: this.interpolationEnabled
         });
-        console.log('Chart initialized');
+        console.log(`📊 Chart initialized | Interpolation: ${this.interpolationEnabled ? 'ON' : '⚠️ OFF (testing)'}`);
+        // console.log('Chart initialized'); // ОТКЛЮЧЕНО
     }
 
     // 🚀 Инициализация отслеживания видимости страницы
@@ -538,7 +544,7 @@ class ChartManager {
                 this.chart.timeScale().setVisibleLogicalRange(visibleLogicalRange);
             }
 
-            console.log(`Loaded ${data.length} candles for ${symbol}`);
+            console.log(`📈 Loaded ${data.length} historical candles for ${symbol}`);
         } catch (error) {
             window.errorLogger?.error('chart', 'Error loading historical data', {
                 error: error.message,
@@ -1019,6 +1025,17 @@ class ChartManager {
             return;
         }
         
+        // 🔍 ДИАГНОСТИКА: Подсчёт тиков и новых свечей
+        if (!isNewCandle) {
+            this.tickCounter++;
+            if (this.tickCounter % 20 === 0) {
+                console.log(`📊 Ticks: ${this.tickCounter}, Candles: ${this.newCandleCounter}, Current: ${candle.close.toFixed(4)}`);
+            }
+        } else {
+            this.newCandleCounter++;
+            console.log(`🕯️ NEW CANDLE #${this.newCandleCounter}: time=${candle.time}, open=${candle.open.toFixed(4)}, close=${candle.close.toFixed(4)}`);
+        }
+        
         // 🚀 PAGE VISIBILITY: Проверяем видимость страницы для тиков
         if (!isNewCandle && this.interpolationEnabled && this.lastCandle && this.chartType !== 'line') {
             // Это тик (обновление текущей свечи)
@@ -1170,7 +1187,7 @@ class ChartManager {
                 candleCount: this.candleCount,
                 beforeUpdateTime: beforeUpdateTime
             });
-            console.log('New candle created:', candle.time, 'open:', candle.open, 'close:', candle.close);
+            // console.log('New candle created:', candle.time, 'open:', candle.open, 'close:', candle.close); // ОТКЛЮЧЕНО
             
             // Обновляем lastCandle для следующих проверок
             this.lastCandle = candle;
@@ -1860,7 +1877,10 @@ class ChartManager {
             debugMode: this.changeSymbolDebugMode,
             isInitializingSymbol: this.isInitializingSymbol
         });
-        console.log(`Chart switched to ${newSymbol} with ${this.candleCount} candles`);
+        console.log(`🔄 Chart switched to ${newSymbol} | ${this.candleCount} candles loaded`);
+        // Сбрасываем счётчики для нового символа
+        this.tickCounter = 0;
+        this.newCandleCounter = 0;
     }
 
     // Полная очистка WebSocket соединения
