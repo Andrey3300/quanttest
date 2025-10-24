@@ -643,27 +643,49 @@ class ChartManager {
                         window.errorLogger?.info('websocket', 'Unsubscription confirmed', { 
                             symbol: message.symbol
                         });
-                    } else if (message.type === 'tick') {
-                        // Плавное обновление текущей свечи (не проверяем дубликаты для тиков)
-                        // ИСПРАВЛЕНИЕ: Останавливаем начальную анимацию при получении первого реального тика
-                        if (this.initialAnimationTimer) {
-                            clearInterval(this.initialAnimationTimer);
-                            this.initialAnimationTimer = null;
-                            window.errorLogger?.debug('animation', 'Initial animation stopped - real tick received');
-                        }
-                        this.updateCandle(message.data, false);
-                    } else if (message.type === 'newCandle') {
-                        // Создание новой свечи
-                        // ЗАЩИТА: Проверяем что эту свечу еще не обрабатывали
-                        const candleKey = `${message.data.time}-${message.symbol || this.symbol}`;
-                        if (this.processedCandles.has(candleKey)) {
-                            window.errorLogger?.warn('websocket', 'Duplicate new candle detected - skipping', {
-                                candleKey,
-                                time: message.data.time
-                            });
-                            return;
-                        }
-                        this.processedCandles.add(candleKey);
+            } else if (message.type === 'tick') {
+                // 🛡️ ЗАЩИТА ОТ СМЕШИВАНИЯ АКТИВОВ: Проверяем что тик от правильного символа
+                if (message.symbol && message.symbol !== this.symbol) {
+                    window.errorLogger?.warn('websocket', '🚨 Tick from wrong symbol - REJECTED', {
+                        expectedSymbol: this.symbol,
+                        receivedSymbol: message.symbol,
+                        tickPrice: message.data?.close
+                    });
+                    console.warn(`🚨 Rejected tick from ${message.symbol}, expected ${this.symbol}`);
+                    return; // НЕ ОБРАБАТЫВАЕМ тик от другого символа
+                }
+                
+                // Плавное обновление текущей свечи (не проверяем дубликаты для тиков)
+                // ИСПРАВЛЕНИЕ: Останавливаем начальную анимацию при получении первого реального тика
+                if (this.initialAnimationTimer) {
+                    clearInterval(this.initialAnimationTimer);
+                    this.initialAnimationTimer = null;
+                    window.errorLogger?.debug('animation', 'Initial animation stopped - real tick received');
+                }
+                this.updateCandle(message.data, false);
+            } else if (message.type === 'newCandle') {
+                // 🛡️ ЗАЩИТА ОТ СМЕШИВАНИЯ АКТИВОВ: Проверяем что новая свеча от правильного символа
+                if (message.symbol && message.symbol !== this.symbol) {
+                    window.errorLogger?.warn('websocket', '🚨 New candle from wrong symbol - REJECTED', {
+                        expectedSymbol: this.symbol,
+                        receivedSymbol: message.symbol,
+                        candleTime: message.data?.time
+                    });
+                    console.warn(`🚨 Rejected new candle from ${message.symbol}, expected ${this.symbol}`);
+                    return; // НЕ ОБРАБАТЫВАЕМ свечу от другого символа
+                }
+                
+                // Создание новой свечи
+                // ЗАЩИТА: Проверяем что эту свечу еще не обрабатывали
+                const candleKey = `${message.data.time}-${message.symbol || this.symbol}`;
+                if (this.processedCandles.has(candleKey)) {
+                    window.errorLogger?.warn('websocket', 'Duplicate new candle detected - skipping', {
+                        candleKey,
+                        time: message.data.time
+                    });
+                    return;
+                }
+                this.processedCandles.add(candleKey);
                         
                         // Ограничиваем размер Set для предотвращения утечки памяти
                         if (this.processedCandles.size > 10000) {
@@ -830,7 +852,8 @@ class ChartManager {
                 queueSize: this.pendingTicks.length
             });
             
-            this.pendingTicks.push({ candle, isNewCandle });
+            // 🛡️ ЗАЩИТА: Сохраняем символ вместе с тиком для проверки при применении
+            this.pendingTicks.push({ candle, isNewCandle, symbol: this.symbol });
             
             // Ограничиваем размер очереди (только последние 5 тиков)
             if (this.pendingTicks.length > 5) {
@@ -1609,6 +1632,19 @@ class ChartManager {
             return;
         }
         
+        // 🛡️ ТРЕТИЙ УРОВЕНЬ ЗАЩИТЫ: Валидация свечи перед применением
+        const validation = this.validateCandle(candle, 'applyTickDirectly');
+        if (!validation.valid) {
+            window.errorLogger?.error('chart', '🚨 Tick validation FAILED in applyTickDirectly', {
+                reason: validation.reason,
+                candle,
+                symbol: this.symbol,
+                basePrice: this.basePrice
+            });
+            console.error(`🚨 Invalid tick rejected in applyTickDirectly: ${validation.reason}`);
+            return; // НЕ ПРИМЕНЯЕМ невалидный тик
+        }
+        
         try {
             // Обновляем график напрямую
             activeSeries.update(candle);
@@ -1701,7 +1737,7 @@ class ChartManager {
         
         // 🛡️ БЛОКИРОВКА ТИКОВ: Устанавливаем флаг инициализации
         this.isInitializingSymbol = true;
-        this.pendingTicks = []; // Очищаем очередь тиков
+        this.pendingTicks = []; // Очищаем очередь тиков (ЗАЩИТА ОТ СМЕШИВАНИЯ АКТИВОВ)
         
         window.errorLogger?.info('chart', '🔒 Ticks blocked during initialization', {
             symbol: newSymbol
@@ -1858,22 +1894,33 @@ class ChartManager {
             pendingTicksCount: this.pendingTicks.length
         });
         
-        // Обрабатываем накопленные тики (только последний)
+        // Обрабатываем накопленные тики (только последний и только от ПРАВИЛЬНОГО символа)
         if (this.pendingTicks.length > 0) {
             const latestTick = this.pendingTicks[this.pendingTicks.length - 1];
             
-            window.errorLogger?.info('chart', 'Applying latest pending tick', {
-                symbol: newSymbol,
-                tickTime: latestTick.candle.time,
-                totalPending: this.pendingTicks.length
-            });
-            
-            // Применяем последний тик напрямую
-            this.applyTickDirectly(latestTick.candle, latestTick.isNewCandle);
-            
-            // Обновляем lastCandle
-            this.lastCandle = latestTick.candle;
-            this.currentInterpolatedCandle = { ...latestTick.candle };
+            // 🛡️ КРИТИЧЕСКАЯ ЗАЩИТА: Проверяем что тик от текущего символа
+            if (latestTick.symbol && latestTick.symbol !== newSymbol) {
+                window.errorLogger?.error('chart', '🚨 Pending tick from WRONG symbol - REJECTED!', {
+                    expectedSymbol: newSymbol,
+                    tickSymbol: latestTick.symbol,
+                    tickPrice: latestTick.candle.close,
+                    currentPrice: this.currentPrice
+                });
+                console.error(`🚨 REJECTED pending tick from ${latestTick.symbol}, expected ${newSymbol}`);
+            } else {
+                window.errorLogger?.info('chart', 'Applying latest pending tick', {
+                    symbol: newSymbol,
+                    tickTime: latestTick.candle.time,
+                    totalPending: this.pendingTicks.length
+                });
+                
+                // Применяем последний тик напрямую С ВАЛИДАЦИЕЙ
+                this.applyTickDirectly(latestTick.candle, latestTick.isNewCandle);
+                
+                // Обновляем lastCandle
+                this.lastCandle = latestTick.candle;
+                this.currentInterpolatedCandle = { ...latestTick.candle };
+            }
         }
         
         // Очищаем очередь
