@@ -43,7 +43,7 @@ class ChartManager {
         this.isRestoringRange = false; // флаг восстановления диапазона
         
         // 🎯 ИНТЕРПОЛЯЦИЯ ДЛЯ ПЛАВНОСТИ (smooth transitions between ticks)
-        this.interpolationEnabled = false; // ВРЕМЕННО ОТКЛЮЧЕНО ДЛЯ ПРОВЕРКИ ГИПОТЕЗЫ
+        this.interpolationEnabled = true; // Плавная анимация между тиками
         this.targetCandle = null; // целевое состояние свечи (куда движемся)
         this.currentInterpolatedCandle = null; // текущее интерполированное состояние
         this.interpolationStartTime = null; // время начала интерполяции
@@ -899,8 +899,10 @@ class ChartManager {
             return;
         }
         
-        // Для Candles и Bars - используем группировку по таймфрейму
-        if (this.chartType === 'candles' || this.chartType === 'bars') {
+        // 🔧 КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Для S5 (базовый таймфрейм сервера) НЕ используем группировку
+        // Сервер уже генерирует свечи S5, группировка только создает конфликты timestamp
+        // Для остальных таймфреймов (S10, M1, M2 и т.д.) используем группировку
+        if ((this.chartType === 'candles' || this.chartType === 'bars') && this.timeframe !== 'S5') {
             if (!window.chartTimeframeManager) {
                 window.errorLogger?.error('chart', 'chartTimeframeManager not available');
                 return;
@@ -924,6 +926,13 @@ class ChartManager {
             this.currentCandleByTimeframe = result.candle;
             isNewCandle = result.isNewCandle;
             candle = result.candle;
+            
+            window.errorLogger?.debug('chart', 'Candle grouped by timeframe', {
+                timeframe: this.timeframe,
+                originalTime: tick.time,
+                groupedTime: candle.time,
+                isNewCandle: isNewCandle
+            });
         }
 
         // Проверяем корректность данных
@@ -1226,19 +1235,20 @@ class ChartManager {
                                 
                                 // 1. Вычисляем "чистую" ширину видимых свечей БЕЗ rightOffset
                                 const totalWidth = currentRange.to - currentRange.from;
-                                const pureVisibleBars = Math.max(this.MIN_VISIBLE_BARS, Math.floor(totalWidth - rightOffsetBars));
+                                // ИСПРАВЛЕНИЕ: Берем максимум между текущей шириной и MIN_VISIBLE_BARS
+                                const pureVisibleBars = Math.max(this.MIN_VISIBLE_BARS + 20, Math.min(200, Math.floor(totalWidth - rightOffsetBars)));
                                 
                                 // 2. Используем candleCount для расчета
                                 const safeLastCandleIndex = this.candleCount - 1;
                                 
                                 // 3. КРИТИЧЕСКАЯ ПРОВЕРКА: убедимся что candleCount достаточно большой
-                                if (safeLastCandleIndex < pureVisibleBars) {
+                                if (safeLastCandleIndex < this.MIN_VISIBLE_BARS) {
                                     window.errorLogger?.warn('range', 'Not enough candles for scroll calculation', {
                                         candleCount: this.candleCount,
                                         pureVisibleBars: pureVisibleBars,
                                         lastCandleIndex: safeLastCandleIndex
                                     });
-                                    console.warn('Not enough candles for scroll:', this.candleCount, 'needed:', pureVisibleBars);
+                                    console.warn('Not enough candles for scroll:', this.candleCount, 'needed:', this.MIN_VISIBLE_BARS);
                                     return;
                                 }
                                 
