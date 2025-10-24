@@ -147,6 +147,7 @@ class ChartGenerator {
                     close: candle.close
                 }
             });
+            console.error(`🚨 ANOMALY: ${this.symbol} - range ${(rangePercent * 100).toFixed(2)}% exceeds limit`);
             
             return { 
                 valid: false, 
@@ -452,7 +453,6 @@ class ChartGenerator {
                 symbol: this.symbol,
                 candle: candle
             });
-            console.error('Invalid new candle time:', candle);
             candle.time = Math.floor(Date.now() / 1000);
         }
         
@@ -600,7 +600,6 @@ class ChartGenerator {
                 tickCandle: tickCandle,
                 currentState: this.currentCandleState
             });
-            console.error('Invalid tick candle data:', tickCandle);
             // Возвращаем безопасную копию без NaN
             return {
                 time: this.currentCandleState.time || Math.floor(Date.now() / 1000),
@@ -965,7 +964,8 @@ function initializeAllGenerators() {
         fresh: initialized - restored
     });
     
-    console.log(`✅ Initialized ${initialized} chart generators (${restored} restored from disk, ${initialized - restored} fresh)`);
+    // Оставляем информационное сообщение для старта сервера
+    console.log(`✅ Initialized ${initialized} chart generators (${restored} restored, ${initialized - restored} fresh)`);
     
     return { initialized, restored };
 }
