@@ -84,8 +84,9 @@ class ChartGenerator {
         this.maxCandleChange = 0.015; // максимальное изменение за свечу (1.5%)
         this.candles = [];
         
-        // 🔕 SILENT MODE: Отключение логирования во время массовой генерации
-        this.silentMode = false;
+        // 🔕 SILENT MODE: Отключение логирования во время массовой генерации  
+        // По умолчанию включен для инициализации, выключается после
+        this.silentMode = true;
         
         // 🛡️ УМНАЯ ВАЛИДАЦИЯ: Лимиты зависят от типа актива
         const assetType = getAssetType(symbol);
@@ -242,6 +243,12 @@ class ChartGenerator {
         if (price >= 0.1) return 5;       // Например DOGE: 0.14523
         if (price >= 0.01) return 6;      // Например маленькие пары
         return 8;                          // Для очень маленьких цен
+    }
+    
+    // 🔕 Управление silent mode
+    setSilentMode(enabled) {
+        this.silentMode = enabled;
+        return this; // Для цепочки вызовов
     }
 
     // 🛡️ ВАЛИДАЦИЯ СВЕЧИ НА АНОМАЛИИ
@@ -748,18 +755,20 @@ class ChartGenerator {
             candle.time = Math.floor(Date.now() / 1000);
         }
         
-        // РЕШЕНИЕ #5: Детальное логирование для мониторинга
-        logger.logCandle('New candle sent to clients', this.symbol, candle);
-        logger.debug('candle', 'Candle creation details', {
-            symbol: this.symbol,
-            time: candle.time,
-            timeISO: new Date(candle.time * 1000).toISOString(),
-            open: candle.open,
-            close: candle.close,
-            totalCandles: this.candles.length,
-            previousCandleTime: this.candles.length > 1 ? this.candles[this.candles.length - 2].time : null,
-            timeDiff: this.candles.length > 1 ? candle.time - this.candles[this.candles.length - 2].time : null
-        });
+        // РЕШЕНИЕ #5: Детальное логирование для мониторинга (только не в silent mode)
+        if (!this.silentMode) {
+            logger.logCandle('New candle sent to clients', this.symbol, candle);
+            logger.debug('candle', 'Candle creation details', {
+                symbol: this.symbol,
+                time: candle.time,
+                timeISO: new Date(candle.time * 1000).toISOString(),
+                open: candle.open,
+                close: candle.close,
+                totalCandles: this.candles.length,
+                previousCandleTime: this.candles.length > 1 ? this.candles[this.candles.length - 2].time : null,
+                timeDiff: this.candles.length > 1 ? candle.time - this.candles[this.candles.length - 2].time : null
+            });
+        }
         
         return candle;
     }
@@ -1345,8 +1354,14 @@ function getGenerator(symbol, timeframe = 'S5') {
                 'S5' // базовый таймфрейм
             );
             
+            // 🔕 SILENT MODE: Включаем перед генерацией для снижения логирования
+            generator.setSilentMode(true);
+            
             // Генерируем исторические данные
             generator.generateHistoricalData();
+            
+            // 🔕 SILENT MODE: Выключаем после генерации
+            generator.setSilentMode(false);
             
             logger.info('generator', 'Base S5 generator created', {
                 symbol,
@@ -1370,11 +1385,17 @@ function getGenerator(symbol, timeframe = 'S5') {
                 timeframe
             );
             
+            // 🔕 SILENT MODE: Включаем перед генерацией для снижения логирования
+            generator.setSilentMode(true);
+            
             // Создаем агрегатор для построения свечей из S5
             generator.aggregator = new TimeframeAggregator(baseGenerator, timeframe);
             
             // Генерируем исторические данные (агрегируя из S5)
             generator.generateHistoricalData();
+            
+            // 🔕 SILENT MODE: Выключаем после генерации
+            generator.setSilentMode(false);
             
             logger.info('generator', 'Aggregated generator created', {
                 symbol,
