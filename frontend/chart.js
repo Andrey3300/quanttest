@@ -79,6 +79,11 @@ class ChartManager {
         // 🔍 ДИАГНОСТИКА: Счётчик тиков для отладки
         this.tickCounter = 0;
         this.newCandleCounter = 0;
+        
+        // 🎯 РЕШЕНИЕ ЗАВИСАНИЯ: S5 кеш для rebuild таймфреймов
+        // Хранит ВСЕ S5 свечи независимо от текущего типа графика/таймфрейма
+        this.s5CandlesCache = []; // Массив S5 свечей {time, open, high, low, close, volume}
+        this.MAX_S5_CACHE_SIZE = 20000; // ~27 часов S5 свечей (20000 * 5 сек)
     }
 
     // Инициализация графика
@@ -465,6 +470,16 @@ class ChartManager {
                 return;
             }
 
+            // 🎯 КРИТИЧНО: Заполняем S5 кеш для rebuild таймфреймов
+            // Сервер всегда возвращает S5 свечи, сохраняем их независимо от типа графика
+            this.s5CandlesCache = data.map(candle => ({ ...candle })); // Делаем копию
+            
+            window.errorLogger?.info('chart', '✅ S5 cache populated from historical data', {
+                cacheSize: this.s5CandlesCache.length,
+                firstTime: this.s5CandlesCache[0]?.time,
+                lastTime: this.s5CandlesCache[this.s5CandlesCache.length - 1]?.time
+            });
+            
             // Устанавливаем данные в зависимости от типа графика
             if (this.chartType === 'line') {
                 // Для Line графика конвертируем OHLC в простые точки
@@ -1022,11 +1037,14 @@ class ChartManager {
                 const now = candle.time;
                 const candleStartTime = window.chartTimeframeManager.getCandleStartTime(now, this.timeframe);
                 
-                window.errorLogger?.info('chart', '🔨 Initializing currentCandleByTimeframe from tick', {
+                window.errorLogger?.warn('chart', '🔨 currentCandleByTimeframe was NULL - initializing from tick', {
                     timeframe: this.timeframe,
                     tickTime: now,
-                    candleStartTime: candleStartTime
+                    candleStartTime: candleStartTime,
+                    tickPrice: candle.close
                 });
+                
+                console.log(`⚠️ Initializing currentCandleByTimeframe for ${this.timeframe} from tick at ${candle.close}`);
                 
                 // Создаем новую свечу таймфрейма из текущего тика
                 this.currentCandleByTimeframe = {
@@ -1037,6 +1055,17 @@ class ChartManager {
                     close: candle.close,
                     volume: candle.volume || 0
                 };
+                
+                // 🎯 КРИТИЧНО: Применяем эту свечу на график чтобы "разморозить" его
+                const activeSeries = this.getActiveSeries();
+                if (activeSeries) {
+                    activeSeries.update(this.currentCandleByTimeframe);
+                    window.errorLogger?.info('chart', '✅ Chart unfrozen - initial candle applied', {
+                        timeframe: this.timeframe,
+                        candle: this.currentCandleByTimeframe
+                    });
+                    console.log(`✅ Chart UNFROZEN for ${this.timeframe} at price ${candle.close}`);
+                }
             }
             
             // Преобразуем данные свечи в формат тика для группировки
@@ -1057,6 +1086,31 @@ class ChartManager {
             this.currentCandleByTimeframe = result.candle;
             isNewCandle = result.isNewCandle;
             candle = result.candle;
+            
+            // 🛡️ ВАЛИДАЦИЯ РАЗМЕРА СВЕЧИ: Защита от аномально больших свечей
+            if (this.basePrice && candle.high && candle.low) {
+                const candleRange = candle.high - candle.low;
+                const rangePercent = (candleRange / this.basePrice) * 100;
+                const maxRangePercent = this.MAX_CANDLE_RANGE_PERCENT * 100; // 3%
+                
+                if (rangePercent > maxRangePercent) {
+                    window.errorLogger?.error('chart', '🚨 ANOMALY: Candle range too large - REJECTED', {
+                        timeframe: this.timeframe,
+                        candleTime: candle.time,
+                        high: candle.high,
+                        low: candle.low,
+                        range: candleRange.toFixed(6),
+                        rangePercent: rangePercent.toFixed(2) + '%',
+                        maxAllowed: maxRangePercent + '%',
+                        basePrice: this.basePrice
+                    });
+                    
+                    console.error(`🚨 REJECTED: Anomalous candle with ${rangePercent.toFixed(2)}% range (max ${maxRangePercent}%)`);
+                    
+                    // Не обновляем график этой свечой - используем предыдущее состояние
+                    return;
+                }
+            }
             
             window.errorLogger?.debug('chart', 'Candle grouped by timeframe', {
                 timeframe: this.timeframe,
@@ -1240,6 +1294,41 @@ class ChartManager {
         // Обновляем свечу без интерполяции (для новых свечей или если интерполяция выключена)
         try {
             activeSeries.update(candle);
+            
+            // 🎯 КРИТИЧНО: Добавляем S5 свечи в кеш для rebuild
+            // Добавляем ТОЛЬКО если это S5 свеча (не сгруппированная)
+            const isS5Candle = (this.chartType === 'candles' || this.chartType === 'bars') && this.timeframe === 'S5';
+            const isLineChart = this.chartType === 'line';
+            
+            if ((isS5Candle || isLineChart) && isNewCandle) {
+                // Это новая S5 свеча - добавляем в кеш
+                const s5Candle = {
+                    time: candle.time,
+                    open: candle.open,
+                    high: candle.high,
+                    low: candle.low,
+                    close: candle.close,
+                    volume: candle.volume || 0
+                };
+                
+                this.s5CandlesCache.push(s5Candle);
+                
+                // Ограничиваем размер кеша
+                if (this.s5CandlesCache.length > this.MAX_S5_CACHE_SIZE) {
+                    const excessCount = this.s5CandlesCache.length - this.MAX_S5_CACHE_SIZE;
+                    this.s5CandlesCache.splice(0, excessCount);
+                    
+                    window.errorLogger?.debug('chart', 'S5 cache trimmed', {
+                        removed: excessCount,
+                        newSize: this.s5CandlesCache.length
+                    });
+                }
+                
+                window.errorLogger?.debug('chart', '✅ S5 candle added to cache', {
+                    cacheSize: this.s5CandlesCache.length,
+                    candleTime: candle.time
+                });
+            }
             
             // РЕШЕНИЕ #2 ИСПРАВЛЕНО: Надежный подсчет через инкремент
             // НЕ используем candleSeries.data().length т.к. он возвращает только буфер!
@@ -1928,6 +2017,13 @@ class ChartManager {
         this.basePrice = null; // Сбрасываем basePrice
         this.lastHistoricalCandle = null; // Сбрасываем lastHistoricalCandle
         
+        // 🎯 КРИТИЧНО: Очищаем S5 кеш при смене символа
+        this.s5CandlesCache = [];
+        window.errorLogger?.info('chart', '✅ S5 cache cleared for symbol change', {
+            oldSymbol,
+            newSymbol
+        });
+        
         // Очищаем сет обработанных свечей
         this.processedCandles.clear();
 
@@ -2210,7 +2306,8 @@ class ChartManager {
         
         window.errorLogger?.info('chart', '🔨 Rebuilding chart for new timeframe', {
             timeframe,
-            chartType: this.chartType
+            chartType: this.chartType,
+            s5CacheSize: this.s5CandlesCache.length
         });
         
         // 💫 UX: Показываем короткий индикатор загрузки (мигание как на PocketOption)
@@ -2224,13 +2321,55 @@ class ChartManager {
                 return;
             }
             
-            // 2. Получаем ВСЕ текущие S5 свечи с графика
-            // LightweightCharts хранит их внутри, используем метод data()
-            const allS5Candles = this.candleSeries.data() || [];
+            // 2. 🎯 РЕШЕНИЕ ЗАВИСАНИЯ: Используем S5 кеш вместо candleSeries.data()
+            // Кеш содержит ВСЕ S5 свечи независимо от текущего типа графика
+            let allS5Candles = this.s5CandlesCache.length > 0 ? [...this.s5CandlesCache] : [];
             
+            // 🆘 FALLBACK #1: Если кеш пустой, пробуем получить из candleSeries
             if (allS5Candles.length === 0) {
-                window.errorLogger?.warn('chart', 'No S5 candles available for rebuild');
-                return;
+                window.errorLogger?.warn('chart', 'S5 cache empty, trying candleSeries.data()');
+                allS5Candles = this.candleSeries.data() || [];
+            }
+            
+            // 🆘 FALLBACK #2: Если всё равно нет данных, создаем стартовую свечу из currentPrice
+            if (allS5Candles.length === 0) {
+                if (this.currentPrice && this.lastCandle) {
+                    window.errorLogger?.warn('chart', '🆘 No S5 candles - creating initial candle from currentPrice', {
+                        currentPrice: this.currentPrice,
+                        lastCandle: this.lastCandle
+                    });
+                    
+                    const now = Math.floor(Date.now() / 1000);
+                    const candleStartTime = window.chartTimeframeManager.getCandleStartTime(now, timeframe);
+                    
+                    // Создаем начальную свечу для нового таймфрейма
+                    const initialCandle = {
+                        time: candleStartTime,
+                        open: this.currentPrice,
+                        high: this.currentPrice,
+                        low: this.currentPrice,
+                        close: this.currentPrice,
+                        volume: 0
+                    };
+                    
+                    // Устанавливаем её как текущую свечу
+                    this.currentCandleByTimeframe = initialCandle;
+                    this.lastCandle = initialCandle;
+                    
+                    // Устанавливаем на график
+                    activeSeries.setData([initialCandle]);
+                    
+                    window.errorLogger?.info('chart', '✅ Initial candle created from currentPrice', {
+                        candle: initialCandle,
+                        timeframe
+                    });
+                    
+                    return; // Выходим, график инициализирован
+                } else {
+                    window.errorLogger?.error('chart', '🚨 Cannot rebuild - no S5 candles, no currentPrice');
+                    console.error('🚨 Cannot rebuild chart - no data available');
+                    return;
+                }
             }
             
             window.errorLogger?.debug('chart', 'Got S5 candles for grouping', {
@@ -2326,9 +2465,27 @@ class ChartManager {
             }
             
             const elapsed = Date.now() - startTime;
+            
+            // 🎯 КРИТИЧЕСКАЯ ПРОВЕРКА: Убеждаемся что currentCandleByTimeframe инициализирован
+            if (!this.currentCandleByTimeframe) {
+                window.errorLogger?.error('chart', '🚨 CRITICAL: currentCandleByTimeframe is NULL after rebuild!', {
+                    timeframe,
+                    groupedCandlesLength: groupedCandles.length,
+                    lastCandle: this.lastCandle
+                });
+                
+                // 🆘 АВАРИЙНАЯ ИНИЦИАЛИЗАЦИЯ
+                if (groupedCandles.length > 0) {
+                    this.currentCandleByTimeframe = { ...groupedCandles[groupedCandles.length - 1] };
+                    this.lastCandle = this.currentCandleByTimeframe;
+                    window.errorLogger?.warn('chart', '🆘 Emergency initialization of currentCandleByTimeframe');
+                }
+            }
+            
             window.errorLogger?.info('chart', '✅ Chart rebuild complete', {
                 timeframe,
                 groupedCandles: groupedCandles.length,
+                currentCandleByTimeframe: this.currentCandleByTimeframe,
                 elapsedMs: elapsed
             });
             
