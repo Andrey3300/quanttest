@@ -63,6 +63,13 @@ class ChartTimeframeManager {
     }
     
     /**
+     * НОВОЕ: Получить длительность таймфрейма в секундах (для совместимости с work4)
+     */
+    getTimeframeDuration(timeframe) {
+        return this.timeframes[timeframe] || this.timeframes['S5'];
+    }
+    
+    /**
      * Получить время до закрытия текущей свечи
      */
     getTimeUntilCandleClose() {
@@ -108,6 +115,26 @@ class ChartTimeframeManager {
         const mins = Math.floor(seconds / 60);
         const secs = seconds % 60;
         return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    }
+    
+    /**
+     * НОВОЕ: Получить читабельное название таймфрейма (для совместимости с work4)
+     */
+    getTimeframeLabel(timeframe) {
+        const labels = {
+            'S5': 'S5 (5 sec)',
+            'S10': 'S10 (10 sec)',
+            'S15': 'S15 (15 sec)',
+            'S30': 'S30 (30 sec)',
+            'M1': 'M1 (1 min)',
+            'M2': 'M2 (2 min)',
+            'M3': 'M3 (3 min)',
+            'M5': 'M5 (5 min)',
+            'M10': 'M10 (10 min)',
+            'M15': 'M15 (15 min)',
+            'M30': 'M30 (30 min)'
+        };
+        return labels[timeframe] || timeframe;
     }
     
     /**
