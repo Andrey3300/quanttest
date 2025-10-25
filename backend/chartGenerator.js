@@ -227,8 +227,8 @@ class TickGenerator {
         const now = Math.floor(Date.now() / 1000);
         const startTime = now - (24 * 60 * 60); // 24 часа назад
         
-        // Генерируем тики каждые 250ms за 24 часа
-        const tickInterval = 0.25; // 250ms в секундах
+        // Генерируем тики каждые 50ms за 24 часа (было 250ms)
+        const tickInterval = 0.05; // 50ms в секундах
         const totalTicks = Math.floor((24 * 60 * 60) / tickInterval);
         
         let currentTime = startTime;
@@ -284,7 +284,7 @@ class TickGenerator {
      * Генерация следующей цены (Geometric Brownian Motion)
      */
     generateNextPrice(currentPrice) {
-        const dt = 0.25 / (24 * 60 * 60); // 250ms в долях дня
+        const dt = 0.05 / (24 * 60 * 60); // 50ms в долях дня (было 0.25)
         
         // Mean reversion к базовой цене
         const returnForce = (this.basePrice - currentPrice) * this.meanReversionSpeed * dt;
