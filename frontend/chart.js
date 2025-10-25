@@ -1016,6 +1016,29 @@ class ChartManager {
                 return;
             }
             
+            // 🔥 POCKETOPTION STYLE FIX: После rebuild currentCandleByTimeframe уже инициализирован
+            // Если его нет - инициализируем из текущего тика
+            if (!this.currentCandleByTimeframe) {
+                const now = candle.time;
+                const candleStartTime = window.chartTimeframeManager.getCandleStartTime(now, this.timeframe);
+                
+                window.errorLogger?.info('chart', '🔨 Initializing currentCandleByTimeframe from tick', {
+                    timeframe: this.timeframe,
+                    tickTime: now,
+                    candleStartTime: candleStartTime
+                });
+                
+                // Создаем новую свечу таймфрейма из текущего тика
+                this.currentCandleByTimeframe = {
+                    time: candleStartTime,
+                    open: candle.open,
+                    high: candle.high,
+                    low: candle.low,
+                    close: candle.close,
+                    volume: candle.volume || 0
+                };
+            }
+            
             // Преобразуем данные свечи в формат тика для группировки
             const tick = {
                 time: candle.time,
@@ -2073,6 +2096,7 @@ class ChartManager {
     setChartType(type) {
         if (!this.chart) return;
         
+        const previousType = this.chartType;
         this.chartType = type;
         
         // 🎯 КРИТИЧНО: Сбрасываем состояние при смене типа графика
@@ -2087,6 +2111,23 @@ class ChartManager {
         }
         if (this.barSeries) {
             this.barSeries.applyOptions({ visible: type === 'bars' });
+        }
+        
+        // 🔥 POCKETOPTION STYLE: При переключении с line → candles/bars делаем rebuild
+        const switchingFromLineToCandlestick = previousType === 'line' && (type === 'candles' || type === 'bars');
+        const switchingBetweenCandlestickTypes = (previousType === 'candles' || previousType === 'bars') && 
+                                                  (type === 'candles' || type === 'bars') && 
+                                                  previousType !== type;
+        
+        if (switchingFromLineToCandlestick || switchingBetweenCandlestickTypes) {
+            window.errorLogger?.info('chart', '🔨 Rebuilding chart after type change', {
+                from: previousType,
+                to: type,
+                timeframe: this.timeframe
+            });
+            
+            // Пересобираем график для нового типа
+            this.rebuildChartForTimeframe(this.timeframe);
         }
         
         // Создаем/удаляем линию цены в зависимости от типа графика
@@ -2114,8 +2155,12 @@ class ChartManager {
             }
         }
         
-        window.errorLogger?.info('chart', 'Chart type changed', { type });
-        console.log(`✅ Chart type changed to: ${type} (state reset)`);
+        window.errorLogger?.info('chart', 'Chart type changed', { 
+            from: previousType,
+            to: type,
+            rebuilt: switchingFromLineToCandlestick || switchingBetweenCandlestickTypes
+        });
+        console.log(`✅ Chart type changed to: ${type} (${switchingFromLineToCandlestick || switchingBetweenCandlestickTypes ? 'rebuilt' : 'state reset'})`);
     }
     
     // НОВОЕ: Установить таймфрейм
@@ -2123,13 +2168,19 @@ class ChartManager {
         this.timeframe = timeframe;
         
         // 🎯 КРИТИЧНО: Сбрасываем состояние текущей свечи при смене таймфрейма
-        // Это гарантирует что группировка начнется с чистого листа
         this.currentCandleByTimeframe = null;
         
-        window.errorLogger?.info('chart', 'Timeframe changed - state reset', { 
+        window.errorLogger?.info('chart', 'Timeframe changed - rebuilding chart', { 
             timeframe,
-            previousCandle: this.currentCandleByTimeframe ? 'had data' : 'was null'
+            chartType: this.chartType
         });
+        
+        // 🔥 POCKETOPTION STYLE: Полная пересборка графика при смене таймфрейма
+        // Для candles/bars - пересобираем график с группировкой
+        // Для line - ничего не делаем (линия всегда в реальном времени)
+        if (this.chartType !== 'line') {
+            this.rebuildChartForTimeframe(timeframe);
+        }
         
         // Обновляем таймер экспирации только для candles/bars
         if (this.chartType !== 'line' && window.chartTimeframeManager) {
@@ -2145,7 +2196,200 @@ class ChartManager {
             }
         }
         
-        console.log(`✅ Timeframe changed to: ${timeframe} (state reset)`);
+        console.log(`✅ Timeframe changed to: ${timeframe} (chart rebuilt)`);
+    }
+    
+    // 🔥 POCKETOPTION STYLE: Пересборка графика при смене таймфрейма
+    rebuildChartForTimeframe(timeframe) {
+        if (!window.chartTimeframeManager) {
+            window.errorLogger?.error('chart', 'chartTimeframeManager not available');
+            return;
+        }
+        
+        const startTime = Date.now();
+        
+        window.errorLogger?.info('chart', '🔨 Rebuilding chart for new timeframe', {
+            timeframe,
+            chartType: this.chartType
+        });
+        
+        // 💫 UX: Показываем короткий индикатор загрузки (мигание как на PocketOption)
+        this.showChartLoadingIndicator();
+        
+        try {
+            // 1. Получаем активную серию
+            const activeSeries = this.getActiveSeries();
+            if (!activeSeries) {
+                window.errorLogger?.error('chart', 'No active series found');
+                return;
+            }
+            
+            // 2. Получаем ВСЕ текущие S5 свечи с графика
+            // LightweightCharts хранит их внутри, используем метод data()
+            const allS5Candles = this.candleSeries.data() || [];
+            
+            if (allS5Candles.length === 0) {
+                window.errorLogger?.warn('chart', 'No S5 candles available for rebuild');
+                return;
+            }
+            
+            window.errorLogger?.debug('chart', 'Got S5 candles for grouping', {
+                count: allS5Candles.length,
+                firstTime: allS5Candles[0]?.time,
+                lastTime: allS5Candles[allS5Candles.length - 1]?.time
+            });
+            
+            // 3. Если таймфрейм S5 - просто обновляем текущую свечу, без пересборки
+            if (timeframe === 'S5') {
+                window.errorLogger?.info('chart', 'S5 timeframe - no grouping needed');
+                
+                // Просто сохраняем последнюю свечу как текущую
+                if (allS5Candles.length > 0) {
+                    this.currentCandleByTimeframe = allS5Candles[allS5Candles.length - 1];
+                    this.lastCandle = this.currentCandleByTimeframe;
+                }
+                
+                return; // Не пересобираем для S5
+            }
+            
+            // 4. Группируем S5 свечи в нужный таймфрейм
+            const groupedCandles = window.chartTimeframeManager.groupDataByTimeframe(
+                allS5Candles,
+                timeframe
+            );
+            
+            window.errorLogger?.info('chart', 'Candles grouped successfully', {
+                originalCount: allS5Candles.length,
+                groupedCount: groupedCandles.length,
+                timeframe
+            });
+            
+            if (groupedCandles.length === 0) {
+                window.errorLogger?.warn('chart', 'Grouping produced no candles');
+                return;
+            }
+            
+            // 5. Сохраняем текущий диапазон видимости для восстановления
+            let visibleRange = null;
+            try {
+                visibleRange = this.chart.timeScale().getVisibleLogicalRange();
+            } catch (e) {
+                window.errorLogger?.debug('chart', 'Could not get visible range', { error: e.message });
+            }
+            
+            // 6. Очищаем активную серию
+            activeSeries.setData([]);
+            
+            // 7. Устанавливаем сгруппированные свечи
+            activeSeries.setData(groupedCandles);
+            
+            // 8. Обновляем текущую свечу таймфрейма
+            if (groupedCandles.length > 0) {
+                this.currentCandleByTimeframe = { ...groupedCandles[groupedCandles.length - 1] };
+                this.lastCandle = this.currentCandleByTimeframe;
+                
+                // Обновляем текущую цену
+                this.currentPrice = this.currentCandleByTimeframe.close;
+                
+                // Обновляем линию цены
+                if (this.expirationPriceLine) {
+                    this.updateExpirationPriceLine();
+                } else {
+                    this.createExpirationOverlay();
+                }
+            }
+            
+            // 9. Восстанавливаем видимый диапазон (примерно)
+            if (visibleRange) {
+                try {
+                    // Масштабируем диапазон пропорционально количеству свечей
+                    const scaleFactor = groupedCandles.length / allS5Candles.length;
+                    const newRange = {
+                        from: Math.max(0, Math.floor(visibleRange.from * scaleFactor)),
+                        to: Math.min(groupedCandles.length - 1, Math.ceil(visibleRange.to * scaleFactor))
+                    };
+                    
+                    this.chart.timeScale().setVisibleLogicalRange(newRange);
+                } catch (e) {
+                    window.errorLogger?.debug('chart', 'Could not restore visible range', { error: e.message });
+                    // Если не получилось - просто показываем всё
+                    this.chart.timeScale().fitContent();
+                }
+            } else {
+                // Если не было сохраненного диапазона - показываем последние ~100 свечей
+                const visibleBars = Math.min(100, groupedCandles.length);
+                const newRange = {
+                    from: Math.max(0, groupedCandles.length - visibleBars),
+                    to: groupedCandles.length - 1 + 50 // +50 для rightOffset
+                };
+                this.chart.timeScale().setVisibleLogicalRange(newRange);
+            }
+            
+            const elapsed = Date.now() - startTime;
+            window.errorLogger?.info('chart', '✅ Chart rebuild complete', {
+                timeframe,
+                groupedCandles: groupedCandles.length,
+                elapsedMs: elapsed
+            });
+            
+            console.log(`✅ Chart rebuilt: ${allS5Candles.length} S5 candles → ${groupedCandles.length} ${timeframe} candles (${elapsed}ms)`);
+            
+        } catch (error) {
+            window.errorLogger?.error('chart', 'Error during chart rebuild', {
+                error: error.message,
+                stack: error.stack,
+                timeframe
+            });
+            console.error('Error rebuilding chart:', error);
+        } finally {
+            // 💫 UX: Скрываем индикатор загрузки через короткую задержку для плавности
+            setTimeout(() => {
+                this.hideChartLoadingIndicator();
+            }, 150);
+        }
+    }
+    
+    // 💫 UX: Показать индикатор загрузки графика
+    showChartLoadingIndicator() {
+        const chartContainer = document.getElementById('chart');
+        if (!chartContainer) return;
+        
+        // Проверяем что индикатора еще нет
+        let indicator = chartContainer.querySelector('.chart-loading-indicator');
+        if (indicator) return; // Уже есть
+        
+        // Создаем индикатор
+        indicator = document.createElement('div');
+        indicator.className = 'chart-loading-indicator';
+        indicator.innerHTML = `
+            <div class="chart-loading-spinner"></div>
+        `;
+        
+        chartContainer.appendChild(indicator);
+        
+        // Показываем с анимацией
+        requestAnimationFrame(() => {
+            indicator.classList.add('visible');
+        });
+    }
+    
+    // 💫 UX: Скрыть индикатор загрузки графика
+    hideChartLoadingIndicator() {
+        const chartContainer = document.getElementById('chart');
+        if (!chartContainer) return;
+        
+        const indicator = chartContainer.querySelector('.chart-loading-indicator');
+        if (!indicator) return;
+        
+        // Скрываем с анимацией
+        indicator.classList.remove('visible');
+        
+        // Удаляем через 300ms после завершения анимации
+        setTimeout(() => {
+            if (indicator.parentNode) {
+                indicator.parentNode.removeChild(indicator);
+            }
+        }, 300);
     }
     
     // НОВОЕ: Получить активную серию в зависимости от типа графика
