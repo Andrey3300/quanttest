@@ -39,7 +39,7 @@ class ChartManager {
     }
 
     // Инициализация графика
-    init() {
+    async init() {
         const chartContainer = document.getElementById('chart');
         if (!chartContainer) {
             console.error('Chart container not found');
@@ -115,8 +115,16 @@ class ChartManager {
         // Обработка ресайза
         window.addEventListener('resize', () => this.handleResize());
 
+        console.log('📊 Chart initialized, loading data...');
+
+        // 🎯 ЗАГРУЖАЕМ НАЧАЛЬНЫЕ ДАННЫЕ
+        await this.loadHistoricalData(this.symbol, this.timeframe);
+
+        // 🎯 ПОДКЛЮЧАЕМ WEBSOCKET ДЛЯ ТИКОВ
+        this.connectWebSocket(this.symbol);
+
         this.isInitialized = true;
-        console.log('📊 Chart initialized');
+        console.log('✅ Chart fully initialized and connected');
     }
 
     // Применить тип графика (показать нужную серию)

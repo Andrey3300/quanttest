@@ -211,25 +211,30 @@ class TickGenerator {
         
         if (!hasData) {
             // Первый запуск - генерируем историю
-            console.log(`   Generating 24h history for all timeframes...`);
+            console.log(`   Generating 30 days history for all timeframes...`);
             await this.generateHistoricalData();
             this.saveToFiles();
         }
         
         this.initialized = true;
-        console.log(`   ✅ ${this.symbol} ready (${this.aggregators['S5'].candles.length} S5 candles)`);
+        
+        // Логируем количество свечей для каждого таймфрейма
+        const candleCounts = Object.keys(this.aggregators).map(tf => 
+            `${tf}:${this.aggregators[tf].candles.length}`
+        ).join(', ');
+        console.log(`   ✅ ${this.symbol} ready (${candleCounts})`);
     }
     
     /**
-     * Генерация исторических данных за 24 часа
+     * Генерация исторических данных за 30 дней
      */
     async generateHistoricalData() {
         const now = Math.floor(Date.now() / 1000);
-        const startTime = now - (24 * 60 * 60); // 24 часа назад
+        const startTime = now - (30 * 24 * 60 * 60); // 30 дней назад (было 24 часа)
         
-        // Генерируем тики каждые 50ms за 24 часа (было 250ms)
+        // Генерируем тики каждые 50ms за 30 дней (было 250ms)
         const tickInterval = 0.05; // 50ms в секундах
-        const totalTicks = Math.floor((24 * 60 * 60) / tickInterval);
+        const totalTicks = Math.floor((30 * 24 * 60 * 60) / tickInterval);
         
         let currentTime = startTime;
         let price = this.basePrice;
@@ -284,7 +289,7 @@ class TickGenerator {
      * Генерация следующей цены (Geometric Brownian Motion)
      */
     generateNextPrice(currentPrice) {
-        const dt = 0.05 / (24 * 60 * 60); // 50ms в долях дня (было 0.25)
+            const dt = 0.05 / (24 * 60 * 60); // 50ms в долях дня (константа для волатильности)
         
         // Mean reversion к базовой цене
         const returnForce = (this.basePrice - currentPrice) * this.meanReversionSpeed * dt;
