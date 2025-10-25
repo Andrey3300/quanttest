@@ -32,8 +32,8 @@ class ChartManager {
         this.targetCandle = null; // Целевое состояние свечи (куда движемся)
         this.currentInterpolatedCandle = null; // Текущее интерполированное состояние
         this.interpolationStartTime = null; // Время начала интерполяции
-        this.interpolationDuration = 300; // Длительность интерполяции (ms) - базовая для S5
-        this.baseInterpolationDuration = 300; // Базовая длительность
+        this.interpolationDuration = 120; // Длительность интерполяции (ms) - оптимизировано под тики 50ms
+        this.baseInterpolationDuration = 120; // Базовая длительность (уменьшена с 300ms)
         this.animationFrameId = null; // ID для requestAnimationFrame
         this.lastTickTime = 0; // Время последнего тика
     }
@@ -343,9 +343,10 @@ class ChartManager {
             }
             this.lastTickTime = now;
         } else {
-            // Без интерполяции - обновляем напрямую (+ линию цены)
+            // 🔥 FALLBACK: Без интерполяции - обновляем напрямую
             this.updateActiveSeries(updatedCandle, price);
             this.updatePriceLine(price);
+            this.updatePriceDisplay(price);
         }
     }
 
@@ -581,13 +582,15 @@ class ChartManager {
         
         const timeframeDuration = window.chartTimeframeManager.getTimeframeDuration(this.timeframe);
         
-        // Для S5 (5 сек) используем базовую скорость 300ms
+        // 🔥 ОПТИМИЗАЦИЯ: Уменьшена базовая скорость для тиков 50ms
+        // Для S5 (5 сек) используем базовую скорость 120ms (было 300ms)
         // Для более длинных таймфреймов увеличиваем пропорционально
         const ratio = timeframeDuration / 5; // относительно S5
-        const scaledDuration = this.baseInterpolationDuration * Math.pow(ratio, 0.7);
+        const scaledDuration = this.baseInterpolationDuration * Math.pow(ratio, 0.5);
         
-        // Ограничиваем максимум до 3000ms
-        return Math.min(scaledDuration, 3000);
+        // 🔥 ОПТИМИЗАЦИЯ: Ограничиваем максимум до 1000ms (было 3000ms)
+        // Это позволяет графику быстрее реагировать на изменения
+        return Math.min(scaledDuration, 1000);
     }
 
     // 🎨 ИНТЕРПОЛЯЦИЯ - плавная анимация между тиками (60fps)
@@ -596,10 +599,9 @@ class ChartManager {
             return;
         }
         
-        // ✅ НЕ останавливаем предыдущую анимацию - пусть доедет плавно!
-        // Только запускаем если анимации еще нет
+        // 🔥 FIX: Если анимация уже идет, НЕ запускаем новую (обновим targetCandle в handleTick)
         if (this.animationFrameId) {
-            return; // Анимация уже идет, просто обновим targetCandle в handleTick
+            return;
         }
         
         // Рассчитываем длительность на основе таймфрейма
@@ -663,9 +665,25 @@ class ChartManager {
             this.currentInterpolatedCandle = interpolated;
             this.animationFrameId = requestAnimationFrame(() => this.animate());
         } else {
-            // Анимация завершена - устанавливаем финальное состояние
+            // 🎯 КРИТИЧНО: Анимация завершена - синхронизируемся с реальными данными
             this.currentInterpolatedCandle = this.targetCandle;
             this.animationFrameId = null;
+            
+            // 🔥 FIX: Проверяем, не пришли ли новые тики пока анимация шла
+            const lastCandle = this.candles[this.candles.length - 1];
+            if (lastCandle && lastCandle.time === this.targetCandle.time) {
+                // Проверяем, изменилась ли последняя свеча
+                const hasChanges = 
+                    lastCandle.high !== this.targetCandle.high ||
+                    lastCandle.low !== this.targetCandle.low ||
+                    lastCandle.close !== this.targetCandle.close;
+                
+                if (hasChanges) {
+                    // 🚀 Новые данные пришли - запускаем новую анимацию
+                    this.targetCandle = { ...lastCandle };
+                    this.startInterpolation(this.currentInterpolatedCandle, this.targetCandle);
+                }
+            }
         }
     }
 
