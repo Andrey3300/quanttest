@@ -84,6 +84,9 @@ class ChartManager {
         // Хранит ВСЕ S5 свечи независимо от текущего типа графика/таймфрейма
         this.s5CandlesCache = []; // Массив S5 свечей {time, open, high, low, close, volume}
         this.MAX_S5_CACHE_SIZE = 20000; // ~27 часов S5 свечей (20000 * 5 сек)
+        
+        // 🕐 СИНХРОНИЗАЦИЯ ТАЙМЕРА: Время последней синхронизации
+        this.lastTimerSync = 0;
     }
 
     // Инициализация графика
@@ -666,6 +669,53 @@ class ChartManager {
                             timeframe: message.timeframe,
                             connectionId: currentConnectionId
                         });
+                    } else if (message.type === 'currentState') {
+                        // 🎯 КРИТИЧНО: Получили текущее состояние свечи при подписке
+                        window.errorLogger?.info('websocket', '✅ Received current state', {
+                            symbol: message.symbol,
+                            timeframe: message.timeframe,
+                            candleTime: message.candle?.time,
+                            candleStartTime: message.candleStartTime,
+                            timeframeSeconds: message.timeframeSeconds,
+                            price: message.candle?.close
+                        });
+                        
+                        console.log(`📊 Current state received for ${message.symbol}:${message.timeframe} - price: ${message.candle?.close}`);
+                        
+                        // Применяем текущую свечу на график немедленно
+                        if (message.candle) {
+                            // Устанавливаем currentCandleByTimeframe для длинных таймфреймов
+                            if (this.chartType !== 'line' && this.timeframe !== 'S5') {
+                                this.currentCandleByTimeframe = { ...message.candle };
+                                
+                                window.errorLogger?.info('chart', '🔓 Chart initialized with current state', {
+                                    timeframe: this.timeframe,
+                                    candle: message.candle
+                                });
+                            }
+                            
+                            // Применяем свечу на график напрямую (быстрая инициализация)
+                            this.applyTickDirectly(message.candle, false);
+                            
+                            // Обновляем состояния
+                            this.lastCandle = message.candle;
+                            this.currentInterpolatedCandle = { ...message.candle };
+                            
+                            // 🕐 СИНХРОНИЗАЦИЯ ТАЙМЕРА: Отправляем данные в chartTimeframeManager
+                            if (window.chartTimeframeManager) {
+                                window.chartTimeframeManager.syncWithServer(
+                                    message.candleStartTime,
+                                    message.timeframeSeconds,
+                                    message.serverTime
+                                );
+                                
+                                window.errorLogger?.debug('timer', 'Timer synced with server', {
+                                    candleStartTime: message.candleStartTime,
+                                    timeframeSeconds: message.timeframeSeconds,
+                                    serverTime: message.serverTime
+                                });
+                            }
+                        }
                     } else if (message.type === 'unsubscribed') {
                         console.log(`Unsubscribed from ${message.symbol}:${message.timeframe || 'S5'}`);
                         window.errorLogger?.info('websocket', 'Unsubscription confirmed', { 
@@ -691,6 +741,24 @@ class ChartManager {
                         receivedTimeframe: message.timeframe
                     });
                     return; // НЕ ОБРАБАТЫВАЕМ тик от другого таймфрейма
+                }
+                
+                // 🕐 СИНХРОНИЗАЦИЯ: При получении тика обновляем синхронизацию таймера
+                // Это поддерживает точность таймера при долгой работе
+                if (message.data && message.data.time && window.chartTimeframeManager) {
+                    // Получаем длительность таймфрейма
+                    const timeframeSeconds = window.chartTimeframeManager.getTimeframeDuration(this.timeframe);
+                    const serverTime = Math.floor(Date.now() / 1000); // Приблизительное серверное время
+                    
+                    // Обновляем синхронизацию (но только раз в 10 секунд чтобы не спамить)
+                    if (!this.lastTimerSync || (Date.now() - this.lastTimerSync) > 10000) {
+                        window.chartTimeframeManager.syncWithServer(
+                            message.data.time,
+                            timeframeSeconds,
+                            serverTime
+                        );
+                        this.lastTimerSync = Date.now();
+                    }
                 }
                 
                 // Плавное обновление текущей свечи (не проверяем дубликаты для тиков)

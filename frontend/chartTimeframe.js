@@ -18,6 +18,11 @@ class ChartTimeframeManager {
             'M30': 1800    // 30 минут
         };
         
+        // 🎯 СИНХРОНИЗАЦИЯ С СЕРВЕРОМ: Данные с бэкенда
+        this.serverCandleStartTime = null; // время начала свечи с сервера
+        this.serverTimeframeSeconds = null; // длительность таймфрейма с сервера
+        this.serverTimeDelta = 0; // разница между временем сервера и клиента (ms)
+        
         // 🎯 УПРОЩЕННАЯ КОНФИГУРАЦИЯ: 100% accumulation для всех таймфреймов
         // Убрано sliding window для стабильности и предсказуемости
         // Все таймфреймы работают как классические биржевые свечи
@@ -120,10 +125,65 @@ class ChartTimeframeManager {
     }
     
     /**
+     * 🎯 СИНХРОНИЗАЦИЯ: Получение времени с учетом данных сервера
+     */
+    getCurrentServerTime() {
+        // Если есть синхронизация с сервером - используем её
+        if (this.serverCandleStartTime !== null && this.serverTimeframeSeconds !== null) {
+            const clientNow = Date.now();
+            const serverNow = clientNow + this.serverTimeDelta;
+            return Math.floor(serverNow / 1000);
+        }
+        
+        // Иначе используем локальное время
+        return Math.floor(Date.now() / 1000);
+    }
+    
+    /**
+     * 🎯 НОВОЕ: Синхронизация с данными сервера
+     */
+    syncWithServer(candleStartTime, timeframeSeconds, serverTime) {
+        this.serverCandleStartTime = candleStartTime;
+        this.serverTimeframeSeconds = timeframeSeconds;
+        
+        // Вычисляем разницу времени клиент-сервер
+        const clientTime = Math.floor(Date.now() / 1000);
+        this.serverTimeDelta = (serverTime - clientTime) * 1000; // в миллисекундах
+        
+        window.errorLogger?.info('timeframe', '✅ Timer synced with server', {
+            candleStartTime: candleStartTime,
+            timeframeSeconds: timeframeSeconds,
+            serverTime: serverTime,
+            clientTime: clientTime,
+            timeDelta: this.serverTimeDelta + 'ms'
+        });
+        
+        console.log(`🕐 Timer synced: candle starts at ${candleStartTime}, duration ${timeframeSeconds}s, delta ${this.serverTimeDelta}ms`);
+    }
+    
+    /**
      * Получить время до закрытия текущей свечи в секундах
      */
     getTimeUntilCandleClose(timeframe = this.currentTimeframe) {
-        const now = Math.floor(Date.now() / 1000); // Текущее время в секундах
+        // 🎯 КРИТИЧНО: Используем синхронизированное время с сервером
+        if (this.serverCandleStartTime !== null && this.serverTimeframeSeconds !== null) {
+            const now = this.getCurrentServerTime();
+            const candleEndTime = this.serverCandleStartTime + this.serverTimeframeSeconds;
+            const remaining = candleEndTime - now;
+            
+            // Защита от отрицательных значений (свеча уже закрылась, ждем новую)
+            if (remaining < 0) {
+                // Вычисляем начало следующей свечи
+                const nextCandleStart = Math.ceil(now / this.serverTimeframeSeconds) * this.serverTimeframeSeconds;
+                const nextCandleEnd = nextCandleStart + this.serverTimeframeSeconds;
+                return Math.max(0, nextCandleEnd - now);
+            }
+            
+            return Math.max(0, remaining);
+        }
+        
+        // Fallback к старому методу если нет синхронизации
+        const now = Math.floor(Date.now() / 1000);
         const endTime = this.getCandleEndTime(now, timeframe);
         return endTime - now;
     }
