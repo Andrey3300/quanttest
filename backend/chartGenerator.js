@@ -3,9 +3,71 @@
 
 const logger = require('./errorLogger');
 
+// ===== MULTI-TIMEFRAME CONFIGURATION =====
+// Поддерживаемые таймфреймы (IQCent style)
+const TIMEFRAMES = {
+    'S5': { seconds: 5, name: '5 seconds' },
+    'S10': { seconds: 10, name: '10 seconds' },
+    'S30': { seconds: 30, name: '30 seconds' },
+    'M1': { seconds: 60, name: '1 minute' },
+    'M2': { seconds: 120, name: '2 minutes' },
+    'M5': { seconds: 300, name: '5 minutes' },
+    'M10': { seconds: 600, name: '10 minutes' },
+    'M30': { seconds: 1800, name: '30 minutes' },
+    'H1': { seconds: 3600, name: '1 hour' }
+};
+
+// ===== SMART VALIDATION LIMITS =====
+// Разные лимиты для разных типов активов
+const ASSET_VALIDATION_LIMITS = {
+    // FOREX - низкая волатильность, строгие лимиты
+    'FOREX': {
+        maxCandleRangePercent: 0.02,  // 2%
+        maxPriceJumpPercent: 0.015    // 1.5%
+    },
+    // CRYPTO - высокая волатильность, мягкие лимиты
+    'CRYPTO': {
+        maxCandleRangePercent: 0.15,  // 15%
+        maxPriceJumpPercent: 0.10     // 10%
+    },
+    // COMMODITIES - средняя волатильность
+    'COMMODITIES': {
+        maxCandleRangePercent: 0.05,  // 5%
+        maxPriceJumpPercent: 0.03     // 3%
+    },
+    // DEFAULT - для неизвестных активов
+    'DEFAULT': {
+        maxCandleRangePercent: 0.05,  // 5%
+        maxPriceJumpPercent: 0.03     // 3%
+    }
+};
+
+// Определение типа актива по символу
+function getAssetType(symbol) {
+    // Криптовалюты
+    if (symbol.includes('BTC') || symbol.includes('ETH') || symbol.includes('SOL') || 
+        symbol.includes('BNB') || symbol.includes('ADA') || symbol.includes('DOGE') ||
+        symbol.includes('DOT') || symbol.includes('MATIC') || symbol.includes('LTC') ||
+        symbol.includes('LINK') || symbol.includes('AVAX') || symbol.includes('TRX') ||
+        symbol.includes('TON')) {
+        return 'CRYPTO';
+    }
+    
+    // Товары
+    if (symbol.includes('GOLD') || symbol.includes('SILVER') || symbol.includes('BRENT') ||
+        symbol.includes('WTI') || symbol.includes('NATGAS') || symbol.includes('PALLADIUM') ||
+        symbol.includes('PLATINUM')) {
+        return 'COMMODITIES';
+    }
+    
+    // Все остальное - Forex
+    return 'FOREX';
+}
+
 class ChartGenerator {
-    constructor(symbol, basePrice, volatility = 0.002, drift = 0.0, meanReversionSpeed = 0.05) {
+    constructor(symbol, basePrice, volatility = 0.002, drift = 0.0, meanReversionSpeed = 0.05, timeframe = 'S5') {
         this.symbol = symbol;
+        this.timeframe = timeframe; // 🎯 НОВОЕ: таймфрейм генератора
         this.basePrice = basePrice;
         this.currentPrice = basePrice;
         
@@ -20,15 +82,30 @@ class ChartGenerator {
         this.maxCandleChange = 0.015; // максимальное изменение за свечу (1.5%)
         this.candles = [];
         
-        // 🛡️ ЗАЩИТА ОТ АНОМАЛИЙ: Лимиты для валидации свечей
-        this.MAX_CANDLE_RANGE_PERCENT = 0.025; // Максимальный размах свечи (2.5% от basePrice)
-        this.MAX_PRICE_JUMP_PERCENT = 0.02; // Максимальный скачок цены между свечами (2%)
+        // 🛡️ УМНАЯ ВАЛИДАЦИЯ: Лимиты зависят от типа актива
+        const assetType = getAssetType(symbol);
+        const limits = ASSET_VALIDATION_LIMITS[assetType] || ASSET_VALIDATION_LIMITS.DEFAULT;
+        this.MAX_CANDLE_RANGE_PERCENT = limits.maxCandleRangePercent;
+        this.MAX_PRICE_JUMP_PERCENT = limits.maxPriceJumpPercent;
+        this.assetType = assetType; // Сохраняем для логирования
+        
+        logger.debug('generator', 'Smart validation limits applied', {
+            symbol,
+            timeframe,
+            assetType,
+            maxCandleRange: (this.MAX_CANDLE_RANGE_PERCENT * 100).toFixed(1) + '%',
+            maxPriceJump: (this.MAX_PRICE_JUMP_PERCENT * 100).toFixed(1) + '%'
+        });
         
         // 🌊 СИСТЕМА ВОЛНООБРАЗНОГО ДВИЖЕНИЯ
         this.currentDrift = 0.0; // текущий динамический тренд (изменяется со временем)
         this.trendChangeCounter = 0; // счетчик для смены тренда
         this.trendChangePeriod = this.randomInt(30, 80); // меняем тренд каждые 30-80 свечей
         this.trendStrength = 0.0002; // сила тренда (для создания волн)
+        
+        // 🎯 MULTI-TIMEFRAME: Кеш S5 свечей для агрегации (только для TF > S5)
+        this.s5CandlesBuffer = []; // Буфер S5 свечей для построения длинных свечей
+        this.isBaseGenerator = (timeframe === 'S5'); // Флаг базового генератора
     }
 
     // Генерация случайного числа с нормальным распределением (Box-Muller)
@@ -328,7 +405,14 @@ class ChartGenerator {
     }
 
     // Генерация исторических данных за 3 дня с шагом 5 секунд
-    generateHistoricalData(days = 3, intervalSeconds = 5) {
+    generateHistoricalData(days = 3) {
+        // 🎯 MULTI-TIMEFRAME: Если это не базовый S5 генератор - агрегируем из S5
+        if (!this.isBaseGenerator && this.aggregator) {
+            return this.generateHistoricalDataFromAggregation(days);
+        }
+        
+        // Базовый S5 генератор - работает как раньше
+        const intervalSeconds = 5;
         const candles = [];
         const now = Date.now();
         
@@ -368,8 +452,9 @@ class ChartGenerator {
             };
         }
         
-        logger.info('historical', 'Historical data generated', {
+        logger.info('historical', 'Historical data generated (S5)', {
             symbol: this.symbol,
+            timeframe: this.timeframe,
             totalCandles: candles.length,
             lastCandleTime: candles[candles.length - 1]?.time,
             alignedCurrentTime: alignedCurrentTime,
@@ -379,9 +464,81 @@ class ChartGenerator {
         
         return candles;
     }
+    
+    // 🎯 MULTI-TIMEFRAME: Генерация исторических данных через агрегацию S5
+    generateHistoricalDataFromAggregation(days = 3) {
+        const baseCandles = this.aggregator.baseGenerator.candles;
+        
+        if (!baseCandles || baseCandles.length === 0) {
+            logger.warn('historical', 'No S5 candles available for aggregation', {
+                symbol: this.symbol,
+                timeframe: this.timeframe
+            });
+            this.candles = [];
+            return [];
+        }
+        
+        const aggregatedCandles = [];
+        
+        // Агрегируем каждую S5 свечу
+        for (const s5Candle of baseCandles) {
+            const result = this.aggregator.aggregateCandle(s5Candle);
+            
+            // Если завершилась предыдущая свеча - добавляем её
+            if (result.completed) {
+                aggregatedCandles.push(result.completed);
+            }
+        }
+        
+        // Добавляем текущую незавершенную свечу
+        if (this.aggregator.currentAggregatedCandle) {
+            aggregatedCandles.push(this.aggregator.currentAggregatedCandle);
+        }
+        
+        this.candles = aggregatedCandles;
+        
+        // Синхронизируем currentPrice с базовым генератором
+        this.currentPrice = this.aggregator.baseGenerator.currentPrice;
+        
+        // Инициализируем currentCandleState
+        if (aggregatedCandles.length > 0) {
+            const lastCandle = aggregatedCandles[aggregatedCandles.length - 1];
+            this.currentCandleState = {
+                time: lastCandle.time,
+                open: lastCandle.open,
+                high: lastCandle.high,
+                low: lastCandle.low,
+                close: lastCandle.close,
+                volume: lastCandle.volume,
+                targetClose: lastCandle.close,
+                targetHigh: lastCandle.high,
+                targetLow: lastCandle.low
+            };
+        }
+        
+        logger.info('historical', 'Historical data generated via aggregation', {
+            symbol: this.symbol,
+            timeframe: this.timeframe,
+            s5CandlesUsed: baseCandles.length,
+            aggregatedCandles: aggregatedCandles.length,
+            lastCandleTime: aggregatedCandles[aggregatedCandles.length - 1]?.time
+        });
+        
+        return aggregatedCandles;
+    }
 
     // Генерация новой свечи для real-time обновления
     generateNextCandle() {
+        // 🎯 MULTI-TIMEFRAME: Для агрегированных таймфреймов не генерируем напрямую
+        // Они обновляются через aggregateS5Candle
+        if (!this.isBaseGenerator && this.aggregator) {
+            logger.warn('candle', 'generateNextCandle called on aggregated generator - use aggregateS5Candle instead', {
+                symbol: this.symbol,
+                timeframe: this.timeframe
+            });
+            return this.currentCandleState || this.aggregator.currentAggregatedCandle;
+        }
+        
         const now = Date.now();
         const precision = this.getPricePrecision(this.basePrice);
         const intervalSeconds = 5; // интервал свечи
@@ -560,6 +717,13 @@ class ChartGenerator {
     
     // Генерация плавного обновления текущей свечи (тика)
     generateCandleTick() {
+        // 🎯 MULTI-TIMEFRAME: Для агрегированных таймфреймов возвращаем текущую свечу
+        if (!this.isBaseGenerator && this.aggregator) {
+            // Для агрегированных таймфреймов тики не генерируются - только целые свечи
+            // Возвращаем текущую агрегированную свечу
+            return this.currentCandleState || this.aggregator.currentAggregatedCandle;
+        }
+        
         if (!this.currentCandleState) {
             // Если свечи нет, создаем начальную
             return this.generateNextCandle();
@@ -792,6 +956,57 @@ class ChartGenerator {
             return matchFrom && matchTo;
         });
     }
+    
+    // 🎯 MULTI-TIMEFRAME: Агрегация новой S5 свечи (для таймфреймов > S5)
+    aggregateS5Candle(s5Candle) {
+        if (this.isBaseGenerator) {
+            logger.warn('aggregation', 'aggregateS5Candle called on base S5 generator', {
+                symbol: this.symbol
+            });
+            return null;
+        }
+        
+        if (!this.aggregator) {
+            logger.error('aggregation', 'No aggregator available', {
+                symbol: this.symbol,
+                timeframe: this.timeframe
+            });
+            return null;
+        }
+        
+        const result = this.aggregator.aggregateCandle(s5Candle);
+        
+        // Обновляем currentCandleState
+        this.currentCandleState = { ...result.candle };
+        
+        // Если завершилась свеча - добавляем в массив
+        if (result.isNew && result.completed) {
+            this.candles.push(result.completed);
+            
+            logger.logCandle(`Aggregated candle completed (${this.timeframe})`, this.symbol, result.completed);
+            
+            // Ограничиваем размер массива
+            const TRIM_THRESHOLD = 10000;
+            const KEEP_CANDLES = 9500;
+            if (this.candles.length > TRIM_THRESHOLD) {
+                this.candles = this.candles.slice(-KEEP_CANDLES);
+                logger.debug('aggregation', 'Trimmed candles array', {
+                    symbol: this.symbol,
+                    timeframe: this.timeframe,
+                    newSize: this.candles.length
+                });
+            }
+        }
+        
+        // Синхронизируем currentPrice с базовым генератором
+        this.currentPrice = this.aggregator.baseGenerator.currentPrice;
+        
+        return {
+            candle: result.candle,
+            isNewCandle: result.isNew,
+            completed: result.completed
+        };
+    }
 
     // ПЕРСИСТЕНТНОСТЬ: Сохранение последних 1000 свечей на диск
     toJSON() {
@@ -801,6 +1016,7 @@ class ChartGenerator {
         
         return {
             symbol: this.symbol,
+            timeframe: this.timeframe, // 🎯 НОВОЕ
             basePrice: this.basePrice,
             currentPrice: this.currentPrice,
             volatility: this.volatility,
@@ -897,7 +1113,72 @@ class ChartGenerator {
     }
 }
 
-// Singleton инстансы для разных символов
+// ===== TIMEFRAME AGGREGATOR =====
+// Класс для агрегации S5 свечей в более длинные таймфреймы
+class TimeframeAggregator {
+    constructor(baseGenerator, targetTimeframe) {
+        this.baseGenerator = baseGenerator; // S5 генератор (источник данных)
+        this.targetTimeframe = targetTimeframe; // Целевой таймфрейм (S10, M1, и т.д.)
+        this.targetSeconds = TIMEFRAMES[targetTimeframe].seconds;
+        this.s5Seconds = TIMEFRAMES['S5'].seconds;
+        this.candlesPerPeriod = this.targetSeconds / this.s5Seconds; // Сколько S5 свечей в одном таймфрейме
+        
+        this.currentAggregatedCandle = null; // Текущая агрегированная свеча
+        this.lastAggregationTime = 0; // Время последней агрегации
+        
+        logger.info('aggregator', 'Timeframe aggregator created', {
+            symbol: baseGenerator.symbol,
+            timeframe: targetTimeframe,
+            candlesPerPeriod: this.candlesPerPeriod
+        });
+    }
+    
+    // Получить время начала периода для таймфрейма
+    getPeriodStartTime(timestamp) {
+        return Math.floor(timestamp / this.targetSeconds) * this.targetSeconds;
+    }
+    
+    // Агрегировать S5 свечу в текущий таймфрейм
+    aggregateCandle(s5Candle) {
+        const periodStart = this.getPeriodStartTime(s5Candle.time);
+        
+        // Если это новый период - создаем новую агрегированную свечу
+        if (!this.currentAggregatedCandle || this.currentAggregatedCandle.time !== periodStart) {
+            // Сохраняем предыдущую (если есть)
+            const completedCandle = this.currentAggregatedCandle;
+            
+            // Создаем новую
+            this.currentAggregatedCandle = {
+                time: periodStart,
+                open: s5Candle.open,
+                high: s5Candle.high,
+                low: s5Candle.low,
+                close: s5Candle.close,
+                volume: s5Candle.volume || 0
+            };
+            
+            logger.debug('aggregator', 'New aggregated candle started', {
+                symbol: this.baseGenerator.symbol,
+                timeframe: this.targetTimeframe,
+                periodStart,
+                s5Time: s5Candle.time
+            });
+            
+            return { candle: this.currentAggregatedCandle, isNew: true, completed: completedCandle };
+        }
+        
+        // Обновляем текущую агрегированную свечу
+        this.currentAggregatedCandle.high = Math.max(this.currentAggregatedCandle.high, s5Candle.high);
+        this.currentAggregatedCandle.low = Math.min(this.currentAggregatedCandle.low, s5Candle.low);
+        this.currentAggregatedCandle.close = s5Candle.close;
+        this.currentAggregatedCandle.volume += (s5Candle.volume || 0);
+        
+        return { candle: this.currentAggregatedCandle, isNew: false, completed: null };
+    }
+}
+
+// Singleton инстансы для разных символов и таймфреймов
+// Ключ: "symbol:timeframe" (например "EUR_USD_OTC:M10")
 const generators = new Map();
 
 // Конфигурация всех символов
@@ -970,30 +1251,71 @@ const SYMBOL_CONFIG = {
             'PLATINUM_OTC': { basePrice: 980, volatility: 0.009, drift: 0.0, meanReversionSpeed: 0.006 }
 };
 
-function getGenerator(symbol) {
-    if (!generators.has(symbol)) {
+// 🎯 MULTI-TIMEFRAME: Получение генератора по символу и таймфрейму
+function getGenerator(symbol, timeframe = 'S5') {
+    const key = `${symbol}:${timeframe}`;
+    
+    if (!generators.has(key)) {
         const symbolConfig = SYMBOL_CONFIG[symbol] || { basePrice: 100, volatility: 0.002, drift: 0.0 };
-        const generator = new ChartGenerator(
-            symbol,
-            symbolConfig.basePrice,
-            symbolConfig.volatility,
-            symbolConfig.drift,
-            symbolConfig.meanReversionSpeed // если не указан, будет использован дефолтный 0.05
-        );
         
-        // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Сразу генерируем исторические данные
-        // Это гарантирует что генератор инициализирован ДО первых тиков
-        generator.generateHistoricalData();
-        
-        logger.info('generator', 'New generator created and initialized', {
-            symbol: symbol,
-            candleCount: generator.candles.length,
-            basePrice: symbolConfig.basePrice
-        });
-        
-        generators.set(symbol, generator);
+        // Для S5 создаем базовый генератор
+        if (timeframe === 'S5') {
+            const generator = new ChartGenerator(
+                symbol,
+                symbolConfig.basePrice,
+                symbolConfig.volatility,
+                symbolConfig.drift,
+                symbolConfig.meanReversionSpeed,
+                'S5' // базовый таймфрейм
+            );
+            
+            // Генерируем исторические данные
+            generator.generateHistoricalData();
+            
+            logger.info('generator', 'Base S5 generator created', {
+                symbol,
+                timeframe: 'S5',
+                candleCount: generator.candles.length,
+                basePrice: symbolConfig.basePrice
+            });
+            
+            generators.set(key, generator);
+        } else {
+            // Для других таймфреймов создаем генератор с агрегатором
+            // Сначала убедимся что есть базовый S5 генератор
+            const baseGenerator = getGenerator(symbol, 'S5');
+            
+            const generator = new ChartGenerator(
+                symbol,
+                symbolConfig.basePrice,
+                symbolConfig.volatility,
+                symbolConfig.drift,
+                symbolConfig.meanReversionSpeed,
+                timeframe
+            );
+            
+            // Создаем агрегатор для построения свечей из S5
+            generator.aggregator = new TimeframeAggregator(baseGenerator, timeframe);
+            
+            // Генерируем исторические данные (агрегируя из S5)
+            generator.generateHistoricalData();
+            
+            logger.info('generator', 'Aggregated generator created', {
+                symbol,
+                timeframe,
+                candleCount: generator.candles.length,
+                basePrice: symbolConfig.basePrice
+            });
+            
+            generators.set(key, generator);
+        }
     }
-    return generators.get(symbol);
+    return generators.get(key);
+}
+
+// Вспомогательная функция для получения базового S5 генератора
+function getBaseGenerator(symbol) {
+    return getGenerator(symbol, 'S5');
 }
 
 // ПЕРСИСТЕНТНОСТЬ: Сохранение всех генераторов на диск
@@ -1011,23 +1333,25 @@ function ensureDataDir() {
 }
 
 // Сохранение одного генератора
-function saveGenerator(symbol) {
+function saveGenerator(symbol, timeframe = 'S5') {
     try {
         ensureDataDir();
         
-        const generator = generators.get(symbol);
+        const key = `${symbol}:${timeframe}`;
+        const generator = generators.get(key);
         if (!generator) {
-            logger.warn('persistence', 'Generator not found for saving', { symbol });
+            logger.warn('persistence', 'Generator not found for saving', { symbol, timeframe });
             return false;
         }
         
         const data = generator.toJSON();
-        const filename = path.join(DATA_DIR, `${symbol}.json`);
+        const filename = path.join(DATA_DIR, `${symbol}_${timeframe}.json`);
         
         fs.writeFileSync(filename, JSON.stringify(data, null, 2), 'utf8');
         
         logger.debug('persistence', 'Generator saved', { 
-            symbol, 
+            symbol,
+            timeframe,
             filename,
             candleCount: data.savedCandleCount 
         });
@@ -1035,7 +1359,8 @@ function saveGenerator(symbol) {
         return true;
     } catch (error) {
         logger.error('persistence', 'Failed to save generator', { 
-            symbol, 
+            symbol,
+            timeframe,
             error: error.message 
         });
         return false;
@@ -1043,12 +1368,12 @@ function saveGenerator(symbol) {
 }
 
 // Загрузка одного генератора
-function loadGenerator(symbol) {
+function loadGenerator(symbol, timeframe = 'S5') {
     try {
-        const filename = path.join(DATA_DIR, `${symbol}.json`);
+        const filename = path.join(DATA_DIR, `${symbol}_${timeframe}.json`);
         
         if (!fs.existsSync(filename)) {
-            logger.debug('persistence', 'No saved data found', { symbol, filename });
+            logger.debug('persistence', 'No saved data found', { symbol, timeframe, filename });
             return null;
         }
         
@@ -1056,6 +1381,7 @@ function loadGenerator(symbol) {
         
         logger.info('persistence', 'Generator data loaded from file', { 
             symbol,
+            timeframe,
             candleCount: data.savedCandleCount,
             savedAt: new Date(data.savedAt).toISOString()
         });
@@ -1063,7 +1389,8 @@ function loadGenerator(symbol) {
         return data;
     } catch (error) {
         logger.error('persistence', 'Failed to load generator', { 
-            symbol, 
+            symbol,
+            timeframe,
             error: error.message 
         });
         return null;
@@ -1077,8 +1404,10 @@ function saveAllGenerators() {
     let saved = 0;
     let failed = 0;
     
-    generators.forEach((generator, symbol) => {
-        if (saveGenerator(symbol)) {
+    generators.forEach((generator, key) => {
+        // Ключ имеет формат "symbol:timeframe"
+        const [symbol, timeframe] = key.split(':');
+        if (saveGenerator(symbol, timeframe)) {
             saved++;
         } else {
             failed++;
@@ -1095,46 +1424,61 @@ function saveAllGenerators() {
 }
 
 // Инициализация всех генераторов (вызывается при старте сервера)
+// 🎯 MULTI-TIMEFRAME: Создаем генераторы для всех таймфреймов
 function initializeAllGenerators() {
-    logger.info('initialization', 'Initializing all generators for 24/7 operation...');
+    logger.info('initialization', '🚀 Initializing multi-timeframe generators (IQCent style)...');
     
     const symbols = Object.keys(SYMBOL_CONFIG);
+    const timeframes = Object.keys(TIMEFRAMES);
+    
     let initialized = 0;
     let restored = 0;
     
     symbols.forEach(symbol => {
-        // Пытаемся загрузить сохраненные данные
-        const savedData = loadGenerator(symbol);
-        
-        // Получаем генератор (создаст новый если нет)
-        const generator = getGenerator(symbol);
-        
-        // Если есть сохраненные данные - восстанавливаем
-        if (savedData && generator.fromJSON(savedData)) {
-            restored++;
-        }
-        
-        initialized++;
+        timeframes.forEach(timeframe => {
+            // Пытаемся загрузить сохраненные данные
+            const savedData = loadGenerator(symbol, timeframe);
+            
+            // Получаем генератор (создаст новый если нет)
+            const generator = getGenerator(symbol, timeframe);
+            
+            // Если есть сохраненные данные - восстанавливаем
+            // Но только для S5 генераторов - агрегированные строятся из S5
+            if (timeframe === 'S5' && savedData && generator.fromJSON(savedData)) {
+                restored++;
+            }
+            
+            initialized++;
+        });
     });
     
-    logger.info('initialization', 'All generators initialized', {
-        total: symbols.length,
+    logger.info('initialization', '✅ All multi-timeframe generators initialized', {
+        symbols: symbols.length,
+        timeframesPerSymbol: timeframes.length,
+        totalGenerators: symbols.length * timeframes.length,
         initialized,
         restored,
         fresh: initialized - restored
     });
     
-    // Оставляем информационное сообщение для старта сервера
-    console.log(`✅ Initialized ${initialized} chart generators (${restored} restored, ${initialized - restored} fresh)`);
+    // Информационное сообщение для старта сервера
+    console.log(`✅ Initialized ${initialized} chart generators across ${timeframes.length} timeframes`);
+    console.log(`   📊 ${symbols.length} symbols × ${timeframes.length} timeframes = ${initialized} total generators`);
+    console.log(`   💾 Restored: ${restored}, Fresh: ${initialized - restored}`);
     
-    return { initialized, restored };
+    return { initialized, restored, symbols: symbols.length, timeframes: timeframes.length };
 }
 
 module.exports = { 
     ChartGenerator, 
-    getGenerator, 
+    TimeframeAggregator,
+    getGenerator,
+    getBaseGenerator,
     generators,
     saveAllGenerators,
     initializeAllGenerators,
-    SYMBOL_CONFIG
+    SYMBOL_CONFIG,
+    TIMEFRAMES,
+    ASSET_VALIDATION_LIMITS,
+    getAssetType
 };
