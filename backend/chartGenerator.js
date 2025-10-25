@@ -21,75 +21,76 @@ const TIMEFRAMES = {
 };
 
 // ===== SYMBOL CONFIGURATION =====
+// 🔥 УВЕЛИЧЕНА ВОЛАТИЛЬНОСТЬ: в 20 раз для красивых свечей с нормальным движением
 const SYMBOL_CONFIG = {
-    // Forex OTC
-    'USD_MXN_OTC': { basePrice: 18.50, volatility: 0.0008, type: 'FOREX' },
-    'EUR_USD_OTC': { basePrice: 1.0850, volatility: 0.0006, type: 'FOREX' },
-    'GBP_USD_OTC': { basePrice: 1.2650, volatility: 0.0007, type: 'FOREX' },
-    'AUD_CAD_OTC': { basePrice: 0.9120, volatility: 0.0006, type: 'FOREX' },
-    'BHD_CNY_OTC': { basePrice: 18.75, volatility: 0.0005, type: 'FOREX' },
-    'EUR_CHF_OTC': { basePrice: 0.9420, volatility: 0.0005, type: 'FOREX' },
-    'KES_USD_OTC': { basePrice: 0.0077, volatility: 0.0008, type: 'FOREX' },
-    'TND_USD_OTC': { basePrice: 0.3180, volatility: 0.0006, type: 'FOREX' },
-    'UAH_USD_OTC': { basePrice: 0.0244, volatility: 0.0009, type: 'FOREX' },
-    'USD_BDT_OTC': { basePrice: 119.50, volatility: 0.0004, type: 'FOREX' },
-    'USD_CNH_OTC': { basePrice: 7.2450, volatility: 0.0005, type: 'FOREX' },
-    'USD_IDR_OTC': { basePrice: 15680, volatility: 0.0006, type: 'FOREX' },
-    'USD_MYR_OTC': { basePrice: 4.4850, volatility: 0.0005, type: 'FOREX' },
-    'AUD_NZD_OTC': { basePrice: 1.0920, volatility: 0.0006, type: 'FOREX' },
-    'USD_PHP_OTC': { basePrice: 56.25, volatility: 0.0006, type: 'FOREX' },
-    'ZAR_USD_OTC': { basePrice: 0.0548, volatility: 0.0010, type: 'FOREX' },
-    'YER_USD_OTC': { basePrice: 0.0040, volatility: 0.0008, type: 'FOREX' },
-    'USD_BRL_OTC': { basePrice: 5.6250, volatility: 0.0009, type: 'FOREX' },
-    'USD_EGP_OTC': { basePrice: 48.75, volatility: 0.0007, type: 'FOREX' },
-    'OMR_CNY_OTC': { basePrice: 18.95, volatility: 0.0006, type: 'FOREX' },
-    'AUD_JPY_OTC': { basePrice: 97.50, volatility: 0.0008, type: 'FOREX' },
-    'EUR_CHF_OTC2': { basePrice: 0.9420, volatility: 0.0005, type: 'FOREX' },
-    'EUR_GBP_OTC': { basePrice: 0.8580, volatility: 0.0006, type: 'FOREX' },
-    'EUR_HUF_OTC': { basePrice: 395.00, volatility: 0.0008, type: 'FOREX' },
-    'EUR_TRY_OTC': { basePrice: 36.25, volatility: 0.0012, type: 'FOREX' },
-    'USD_JPY_OTC': { basePrice: 149.50, volatility: 0.0007, type: 'FOREX' },
-    'USD_CHF_OTC': { basePrice: 0.8680, volatility: 0.0005, type: 'FOREX' },
+    // Forex OTC - волатильность 0.010-0.020 (было 0.0005-0.001)
+    'USD_MXN_OTC': { basePrice: 18.50, volatility: 0.015, type: 'FOREX' },
+    'EUR_USD_OTC': { basePrice: 1.0850, volatility: 0.012, type: 'FOREX' },
+    'GBP_USD_OTC': { basePrice: 1.2650, volatility: 0.014, type: 'FOREX' },
+    'AUD_CAD_OTC': { basePrice: 0.9120, volatility: 0.012, type: 'FOREX' },
+    'BHD_CNY_OTC': { basePrice: 18.75, volatility: 0.010, type: 'FOREX' },
+    'EUR_CHF_OTC': { basePrice: 0.9420, volatility: 0.010, type: 'FOREX' },
+    'KES_USD_OTC': { basePrice: 0.0077, volatility: 0.016, type: 'FOREX' },
+    'TND_USD_OTC': { basePrice: 0.3180, volatility: 0.012, type: 'FOREX' },
+    'UAH_USD_OTC': { basePrice: 0.0244, volatility: 0.018, type: 'FOREX' },
+    'USD_BDT_OTC': { basePrice: 119.50, volatility: 0.008, type: 'FOREX' },
+    'USD_CNH_OTC': { basePrice: 7.2450, volatility: 0.010, type: 'FOREX' },
+    'USD_IDR_OTC': { basePrice: 15680, volatility: 0.012, type: 'FOREX' },
+    'USD_MYR_OTC': { basePrice: 4.4850, volatility: 0.010, type: 'FOREX' },
+    'AUD_NZD_OTC': { basePrice: 1.0920, volatility: 0.012, type: 'FOREX' },
+    'USD_PHP_OTC': { basePrice: 56.25, volatility: 0.012, type: 'FOREX' },
+    'ZAR_USD_OTC': { basePrice: 0.0548, volatility: 0.020, type: 'FOREX' },
+    'YER_USD_OTC': { basePrice: 0.0040, volatility: 0.016, type: 'FOREX' },
+    'USD_BRL_OTC': { basePrice: 5.6250, volatility: 0.018, type: 'FOREX' },
+    'USD_EGP_OTC': { basePrice: 48.75, volatility: 0.014, type: 'FOREX' },
+    'OMR_CNY_OTC': { basePrice: 18.95, volatility: 0.012, type: 'FOREX' },
+    'AUD_JPY_OTC': { basePrice: 97.50, volatility: 0.016, type: 'FOREX' },
+    'EUR_CHF_OTC2': { basePrice: 0.9420, volatility: 0.010, type: 'FOREX' },
+    'EUR_GBP_OTC': { basePrice: 0.8580, volatility: 0.012, type: 'FOREX' },
+    'EUR_HUF_OTC': { basePrice: 395.00, volatility: 0.016, type: 'FOREX' },
+    'EUR_TRY_OTC': { basePrice: 36.25, volatility: 0.024, type: 'FOREX' },
+    'USD_JPY_OTC': { basePrice: 149.50, volatility: 0.014, type: 'FOREX' },
+    'USD_CHF_OTC': { basePrice: 0.8680, volatility: 0.010, type: 'FOREX' },
     
     // Forex Regular
-    'USD_CAD': { basePrice: 1.3850, volatility: 0.0006, type: 'FOREX' },
-    'AUD_CHF': { basePrice: 0.5720, volatility: 0.0007, type: 'FOREX' },
-    'CHF_JPY': { basePrice: 172.25, volatility: 0.0008, type: 'FOREX' },
-    'EUR_AUD': { basePrice: 1.6450, volatility: 0.0007, type: 'FOREX' },
-    'EUR_CHF': { basePrice: 0.9420, volatility: 0.0005, type: 'FOREX' },
-    'EUR_GBP': { basePrice: 0.8580, volatility: 0.0006, type: 'FOREX' },
-    'EUR_JPY': { basePrice: 162.00, volatility: 0.0008, type: 'FOREX' },
-    'EUR_USD': { basePrice: 1.0850, volatility: 0.0006, type: 'FOREX' },
-    'GBP_CAD': { basePrice: 1.7520, volatility: 0.0007, type: 'FOREX' },
-    'GBP_CHF': { basePrice: 1.0980, volatility: 0.0007, type: 'FOREX' },
-    'GBP_USD': { basePrice: 1.2650, volatility: 0.0007, type: 'FOREX' },
+    'USD_CAD': { basePrice: 1.3850, volatility: 0.012, type: 'FOREX' },
+    'AUD_CHF': { basePrice: 0.5720, volatility: 0.014, type: 'FOREX' },
+    'CHF_JPY': { basePrice: 172.25, volatility: 0.016, type: 'FOREX' },
+    'EUR_AUD': { basePrice: 1.6450, volatility: 0.014, type: 'FOREX' },
+    'EUR_CHF': { basePrice: 0.9420, volatility: 0.010, type: 'FOREX' },
+    'EUR_GBP': { basePrice: 0.8580, volatility: 0.012, type: 'FOREX' },
+    'EUR_JPY': { basePrice: 162.00, volatility: 0.016, type: 'FOREX' },
+    'EUR_USD': { basePrice: 1.0850, volatility: 0.012, type: 'FOREX' },
+    'GBP_CAD': { basePrice: 1.7520, volatility: 0.014, type: 'FOREX' },
+    'GBP_CHF': { basePrice: 1.0980, volatility: 0.014, type: 'FOREX' },
+    'GBP_USD': { basePrice: 1.2650, volatility: 0.014, type: 'FOREX' },
     
-    // Crypto
-    'BTC_OTC': { basePrice: 67500, volatility: 0.005, type: 'CRYPTO' },
-    'ETH_OTC': { basePrice: 3250, volatility: 0.006, type: 'CRYPTO' },
-    'BNB_OTC': { basePrice: 585, volatility: 0.007, type: 'CRYPTO' },
-    'SOL_OTC': { basePrice: 165, volatility: 0.008, type: 'CRYPTO' },
-    'DOGE_OTC': { basePrice: 0.145, volatility: 0.009, type: 'CRYPTO' },
-    'ADA_OTC': { basePrice: 0.58, volatility: 0.008, type: 'CRYPTO' },
-    'DOT_OTC': { basePrice: 6.85, volatility: 0.008, type: 'CRYPTO' },
-    'MATIC_OTC': { basePrice: 0.72, volatility: 0.009, type: 'CRYPTO' },
-    'LTC_OTC': { basePrice: 85, volatility: 0.007, type: 'CRYPTO' },
-    'LINK_OTC': { basePrice: 14.50, volatility: 0.008, type: 'CRYPTO' },
-    'AVAX_OTC': { basePrice: 38, volatility: 0.009, type: 'CRYPTO' },
-    'TRX_OTC': { basePrice: 0.165, volatility: 0.008, type: 'CRYPTO' },
-    'TON_OTC': { basePrice: 5.25, volatility: 0.009, type: 'CRYPTO' },
-    'BTC_ETF_OTC': { basePrice: 67500, volatility: 0.005, type: 'CRYPTO' },
-    'TEST_TEST1': { basePrice: 1.0, volatility: 0.003, type: 'CRYPTO' },
-    'BTC': { basePrice: 67500, volatility: 0.005, type: 'CRYPTO' },
+    // Crypto - волатильность 0.08-0.18 (было 0.005-0.009)
+    'BTC_OTC': { basePrice: 67500, volatility: 0.10, type: 'CRYPTO' },
+    'ETH_OTC': { basePrice: 3250, volatility: 0.12, type: 'CRYPTO' },
+    'BNB_OTC': { basePrice: 585, volatility: 0.14, type: 'CRYPTO' },
+    'SOL_OTC': { basePrice: 165, volatility: 0.16, type: 'CRYPTO' },
+    'DOGE_OTC': { basePrice: 0.145, volatility: 0.18, type: 'CRYPTO' },
+    'ADA_OTC': { basePrice: 0.58, volatility: 0.16, type: 'CRYPTO' },
+    'DOT_OTC': { basePrice: 6.85, volatility: 0.16, type: 'CRYPTO' },
+    'MATIC_OTC': { basePrice: 0.72, volatility: 0.18, type: 'CRYPTO' },
+    'LTC_OTC': { basePrice: 85, volatility: 0.14, type: 'CRYPTO' },
+    'LINK_OTC': { basePrice: 14.50, volatility: 0.16, type: 'CRYPTO' },
+    'AVAX_OTC': { basePrice: 38, volatility: 0.18, type: 'CRYPTO' },
+    'TRX_OTC': { basePrice: 0.165, volatility: 0.16, type: 'CRYPTO' },
+    'TON_OTC': { basePrice: 5.25, volatility: 0.18, type: 'CRYPTO' },
+    'BTC_ETF_OTC': { basePrice: 67500, volatility: 0.10, type: 'CRYPTO' },
+    'TEST_TEST1': { basePrice: 1.0, volatility: 0.06, type: 'CRYPTO' },
+    'BTC': { basePrice: 67500, volatility: 0.10, type: 'CRYPTO' },
     
-    // Commodities
-    'GOLD_OTC': { basePrice: 2650, volatility: 0.003, type: 'COMMODITIES' },
-    'SILVER_OTC': { basePrice: 31.50, volatility: 0.004, type: 'COMMODITIES' },
-    'BRENT_OTC': { basePrice: 85.50, volatility: 0.005, type: 'COMMODITIES' },
-    'WTI_OTC': { basePrice: 81.25, volatility: 0.005, type: 'COMMODITIES' },
-    'NATGAS_OTC': { basePrice: 3.25, volatility: 0.008, type: 'COMMODITIES' },
-    'PALLADIUM_OTC': { basePrice: 1050, volatility: 0.006, type: 'COMMODITIES' },
-    'PLATINUM_OTC': { basePrice: 980, volatility: 0.005, type: 'COMMODITIES' }
+    // Commodities - волатильность 0.06-0.16 (было 0.003-0.008)
+    'GOLD_OTC': { basePrice: 2650, volatility: 0.06, type: 'COMMODITIES' },
+    'SILVER_OTC': { basePrice: 31.50, volatility: 0.08, type: 'COMMODITIES' },
+    'BRENT_OTC': { basePrice: 85.50, volatility: 0.10, type: 'COMMODITIES' },
+    'WTI_OTC': { basePrice: 81.25, volatility: 0.10, type: 'COMMODITIES' },
+    'NATGAS_OTC': { basePrice: 3.25, volatility: 0.16, type: 'COMMODITIES' },
+    'PALLADIUM_OTC': { basePrice: 1050, volatility: 0.12, type: 'COMMODITIES' },
+    'PLATINUM_OTC': { basePrice: 980, volatility: 0.10, type: 'COMMODITIES' }
 };
 
 // ===== CANDLE AGGREGATOR CLASS =====
@@ -287,22 +288,31 @@ class TickGenerator {
     
     /**
      * Генерация следующей цены (Geometric Brownian Motion)
+     * 🔥 ИСПРАВЛЕНО: Увеличена волатильность для красивых свечей
      */
     generateNextPrice(currentPrice) {
-            const dt = 0.05 / (24 * 60 * 60); // 50ms в долях дня (константа для волатильности)
+        // 🔥 КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: используем прямую волатильность без масштабирования по времени
+        // Тики генерируются каждые 50ms, это дает ~1200 тиков на M1 свечу
+        // Волатильность 0.015 означает что каждый тик может измениться на ±1.5% * gaussianRandom
+        // За свечу M30 (36000 тиков) накопится достаточное движение для красивых свечей
         
-        // Mean reversion к базовой цене
-        const returnForce = (this.basePrice - currentPrice) * this.meanReversionSpeed * dt;
+        // Mean reversion к базовой цене (слабая сила)
+        const deviation = (this.basePrice - currentPrice) / this.basePrice;
+        const returnForce = deviation * this.meanReversionSpeed * 0.001; // очень слабый
         
-        // Случайный компонент (Geometric Brownian Motion)
-        const randomShock = this.gaussianRandom() * this.volatility * Math.sqrt(dt);
+        // Случайный компонент (прямая волатильность без sqrt(dt)!)
+        const randomShock = this.gaussianRandom() * this.volatility * 0.02; // 2% от волатильности за тик
         
         // Новая цена
-        let newPrice = currentPrice * (1 + this.drift * dt + returnForce / currentPrice + randomShock);
+        let newPrice = currentPrice * (1 + returnForce + randomShock);
         
-        // Ограничиваем максимальное изменение
-        const maxChange = currentPrice * 0.01; // 1% за тик
+        // Ограничиваем максимальное изменение за тик
+        const maxChange = currentPrice * 0.005; // максимум 0.5% за тик
         newPrice = Math.max(currentPrice - maxChange, Math.min(currentPrice + maxChange, newPrice));
+        
+        // Ограничиваем общий диапазон (±10% от базы)
+        newPrice = Math.max(newPrice, this.basePrice * 0.90);
+        newPrice = Math.min(newPrice, this.basePrice * 1.10);
         
         // Округляем до разумного количества знаков
         const decimals = this.basePrice < 1 ? 6 : this.basePrice < 100 ? 4 : 2;

@@ -81,9 +81,36 @@ class ChartManager {
                 minBarSpacing: 4,
                 rightOffset: 50,
             },
+            // 🎯 ФОРМАТИРОВАНИЕ ЦЕНЫ: Показываем точные значения (18.5000 вместо 18.75)
+            localization: {
+                priceFormatter: (price) => {
+                    // Автоматически определяем количество знаков в зависимости от цены
+                    if (price >= 10000) return price.toFixed(1);      // BTC: 68750.2
+                    if (price >= 1000) return price.toFixed(2);       // Gold: 2650.50
+                    if (price >= 100) return price.toFixed(3);        // USD/JPY: 149.850
+                    if (price >= 10) return price.toFixed(4);         // USD/MXN: 18.5000
+                    if (price >= 1) return price.toFixed(4);          // EUR/USD: 1.0850
+                    if (price >= 0.1) return price.toFixed(5);        // DOGE: 0.14523
+                    if (price >= 0.01) return price.toFixed(6);       // Small pairs
+                    return price.toFixed(8);                           // Very small
+                }
+            }
         });
 
-        // Создаем серии
+        // Функция для определения точности отображения цены
+        const getPriceFormat = (price) => {
+            if (!price) price = 100; // default
+            if (price >= 10000) return { type: 'price', precision: 1, minMove: 0.1 };
+            if (price >= 1000) return { type: 'price', precision: 2, minMove: 0.01 };
+            if (price >= 100) return { type: 'price', precision: 3, minMove: 0.001 };
+            if (price >= 10) return { type: 'price', precision: 4, minMove: 0.0001 };
+            if (price >= 1) return { type: 'price', precision: 4, minMove: 0.0001 };
+            if (price >= 0.1) return { type: 'price', precision: 5, minMove: 0.00001 };
+            if (price >= 0.01) return { type: 'price', precision: 6, minMove: 0.000001 };
+            return { type: 'price', precision: 8, minMove: 0.00000001 };
+        };
+
+        // Создаем серии с точным форматированием
         this.candleSeries = this.chart.addCandlestickSeries({
             upColor: '#26d07c',
             downColor: '#ff4757',
@@ -93,6 +120,7 @@ class ChartManager {
             wickDownColor: '#ff4757',
             priceLineVisible: false,
             lastValueVisible: false,
+            priceFormat: getPriceFormat(100) // будет обновлен после загрузки данных
         });
 
         this.lineSeries = this.chart.addLineSeries({
@@ -100,6 +128,7 @@ class ChartManager {
             lineWidth: 2,
             priceLineVisible: false,
             lastValueVisible: false,
+            priceFormat: getPriceFormat(100) // будет обновлен после загрузки данных
         });
 
         this.barSeries = this.chart.addBarSeries({
@@ -107,6 +136,7 @@ class ChartManager {
             downColor: '#ff4757',
             priceLineVisible: false,
             lastValueVisible: false,
+            priceFormat: getPriceFormat(100) // будет обновлен после загрузки данных
         });
 
         // Применяем текущий тип графика
@@ -125,6 +155,19 @@ class ChartManager {
 
         this.isInitialized = true;
         console.log('✅ Chart fully initialized and connected');
+    }
+
+    // Получить формат цены на основе значения
+    getPriceFormatForValue(price) {
+        if (!price) price = 100;
+        if (price >= 10000) return { type: 'price', precision: 1, minMove: 0.1 };
+        if (price >= 1000) return { type: 'price', precision: 2, minMove: 0.01 };
+        if (price >= 100) return { type: 'price', precision: 3, minMove: 0.001 };
+        if (price >= 10) return { type: 'price', precision: 4, minMove: 0.0001 };
+        if (price >= 1) return { type: 'price', precision: 4, minMove: 0.0001 };
+        if (price >= 0.1) return { type: 'price', precision: 5, minMove: 0.00001 };
+        if (price >= 0.01) return { type: 'price', precision: 6, minMove: 0.000001 };
+        return { type: 'price', precision: 8, minMove: 0.00000001 };
     }
 
     // Применить тип графика (показать нужную серию)
@@ -165,6 +208,14 @@ class ChartManager {
             this.currentPrice = data.currentPrice;
 
             console.log(`✅ Loaded ${this.candles.length} ${timeframe} candles`);
+
+            // 🎯 Обновляем priceFormat на основе текущей цены
+            if (this.currentPrice) {
+                const priceFormat = this.getPriceFormatForValue(this.currentPrice);
+                this.candleSeries.applyOptions({ priceFormat });
+                this.lineSeries.applyOptions({ priceFormat });
+                this.barSeries.applyOptions({ priceFormat });
+            }
 
             // Отображаем данные
             this.renderCandles();
