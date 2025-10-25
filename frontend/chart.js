@@ -1064,6 +1064,9 @@ class ChartManager {
         // РЕШЕНИЕ #3: Отслеживаем timestamp ПЕРЕД обновлением для проверки
         const beforeUpdateTime = this.lastCandle?.time || 0;
         
+        // 🎯 ИСПРАВЛЕНИЕ: Разная логика для S5 и сгруппированных таймфреймов
+        const isGroupedTimeframe = (this.chartType === 'candles' || this.chartType === 'bars') && this.timeframe !== 'S5';
+        
         // Проверка на устаревшие данные
         if (this.lastCandle && this.lastCandle.time) {
             if (!isNewCandle) {
@@ -1077,25 +1080,42 @@ class ChartManager {
                     });
                     return;
                 }
-                // УЛУЧШЕНИЕ: Если тик пришел с новым временем - обрабатываем как новую свечу
-                if (candle.time > this.lastCandle.time) {
-                    window.errorLogger?.info('chart', 'Tick with new time - treating as new candle', {
-                        tickTime: candle.time,
+                
+                // 🎯 КРИТИЧНО: Для СГРУППИРОВАННЫХ таймфреймов НЕ проверяем время!
+                // Время свечи фиксируется на начале таймфрейма и не меняется
+                // Полностью доверяем флагу isNewCandle от chartTimeframeManager
+                if (!isGroupedTimeframe) {
+                    // Только для S5: Если тик пришел с новым временем - обрабатываем как новую свечу
+                    if (candle.time > this.lastCandle.time) {
+                        window.errorLogger?.info('chart', 'Tick with new time - treating as new candle (S5 only)', {
+                            tickTime: candle.time,
+                            lastCandleTime: this.lastCandle.time,
+                            timeDiff: candle.time - this.lastCandle.time
+                        });
+                        console.log('Tick with new time - treating as new candle:', candle.time, 'last:', this.lastCandle.time);
+                        isNewCandle = true; // Переключаем в режим новой свечи
+                    }
+                } else {
+                    // Для сгруппированных таймфреймов время свечи может быть одинаковым
+                    window.errorLogger?.debug('chart', 'Grouped timeframe - time check skipped', {
+                        timeframe: this.timeframe,
+                        candleTime: candle.time,
                         lastCandleTime: this.lastCandle.time,
-                        timeDiff: candle.time - this.lastCandle.time
+                        isNewCandle: isNewCandle
                     });
-                    console.log('Tick with new time - treating as new candle:', candle.time, 'last:', this.lastCandle.time);
-                    isNewCandle = true; // Переключаем в режим новой свечи
                 }
                 // Если candle.time === this.lastCandle.time - это нормальное обновление текущей свечи
             } else {
                 // Для новых свечей: время должно быть строго больше времени последней свечи
+                // ЭТО применяется как к S5, так и к сгруппированным таймфреймам
                 if (candle.time <= this.lastCandle.time) {
                     window.errorLogger?.warn('chart', 'REJECTED: New candle has older or equal timestamp', {
                         candleTime: candle.time,
                         lastTime: this.lastCandle.time,
                         candleCount: this.candleCount,
-                        timeDiff: candle.time - this.lastCandle.time
+                        timeDiff: candle.time - this.lastCandle.time,
+                        isGroupedTimeframe: isGroupedTimeframe,
+                        timeframe: this.timeframe
                     });
                     console.warn('New candle has older or equal timestamp - candle:', candle.time, 'last:', this.lastCandle.time);
                     return;
@@ -2055,6 +2075,9 @@ class ChartManager {
         
         this.chartType = type;
         
+        // 🎯 КРИТИЧНО: Сбрасываем состояние при смене типа графика
+        this.currentCandleByTimeframe = null;
+        
         // Скрываем все серии
         if (this.candleSeries) {
             this.candleSeries.applyOptions({ visible: type === 'candles' });
@@ -2092,12 +2115,21 @@ class ChartManager {
         }
         
         window.errorLogger?.info('chart', 'Chart type changed', { type });
-        console.log(`Chart type changed to: ${type}`);
+        console.log(`✅ Chart type changed to: ${type} (state reset)`);
     }
     
     // НОВОЕ: Установить таймфрейм
     setTimeframe(timeframe) {
         this.timeframe = timeframe;
+        
+        // 🎯 КРИТИЧНО: Сбрасываем состояние текущей свечи при смене таймфрейма
+        // Это гарантирует что группировка начнется с чистого листа
+        this.currentCandleByTimeframe = null;
+        
+        window.errorLogger?.info('chart', 'Timeframe changed - state reset', { 
+            timeframe,
+            previousCandle: this.currentCandleByTimeframe ? 'had data' : 'was null'
+        });
         
         // Обновляем таймер экспирации только для candles/bars
         if (this.chartType !== 'line' && window.chartTimeframeManager) {
@@ -2113,8 +2145,7 @@ class ChartManager {
             }
         }
         
-        window.errorLogger?.info('chart', 'Timeframe changed', { timeframe });
-        console.log(`Timeframe changed to: ${timeframe}`);
+        console.log(`✅ Timeframe changed to: ${timeframe} (state reset)`);
     }
     
     // НОВОЕ: Получить активную серию в зависимости от типа графика

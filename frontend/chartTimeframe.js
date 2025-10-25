@@ -18,8 +18,9 @@ class ChartTimeframeManager {
             'M30': 1800    // 30 минут
         };
         
-        // 🎯 СКОЛЬЗЯЩЕЕ ОКНО ДИАПАЗОНА: Конфигурация для PocketOption-стиля
-        // Параметры для каждого таймфрейма
+        // 🎯 УПРОЩЕННАЯ КОНФИГУРАЦИЯ: 100% accumulation для всех таймфреймов
+        // Убрано sliding window для стабильности и предсказуемости
+        // Все таймфреймы работают как классические биржевые свечи
         this.timeframeConfig = {
             'S5': { 
                 accumulationPhase: 1.0,    // 100% - всегда накопительный режим
@@ -42,38 +43,38 @@ class ChartTimeframeManager {
                 minRangePercent: 0.025
             },
             'M1': { 
-                accumulationPhase: 0.17,   // 17% времени (10 секунд)
-                fixedRangePercent: 0.03,   // ±0.03% от basePrice
+                accumulationPhase: 1.0,    // 100% - накопление все время
+                fixedRangePercent: null,   // не используется
                 minRangePercent: 0.025     // минимум 0.025%
             },
             'M2': { 
-                accumulationPhase: 0.17,   // 17% времени (20 секунд)
-                fixedRangePercent: 0.04,   // ±0.04%
+                accumulationPhase: 1.0,    // 100% - накопление все время
+                fixedRangePercent: null,
                 minRangePercent: 0.03
             },
             'M3': { 
-                accumulationPhase: 0.16,   // 16% времени (30 секунд)
-                fixedRangePercent: 0.045,  // ±0.045%
+                accumulationPhase: 1.0,    // 100% - накопление все время
+                fixedRangePercent: null,
                 minRangePercent: 0.035
             },
             'M5': { 
-                accumulationPhase: 0.15,   // 15% времени (45 секунд)
-                fixedRangePercent: 0.05,   // ±0.05%
+                accumulationPhase: 1.0,    // 100% - накопление все время
+                fixedRangePercent: null,
                 minRangePercent: 0.04
             },
             'M10': { 
-                accumulationPhase: 0.20,   // 20% времени (2 минуты)
-                fixedRangePercent: 0.06,   // ±0.06%
+                accumulationPhase: 1.0,    // 100% - накопление все время
+                fixedRangePercent: null,
                 minRangePercent: 0.05
             },
             'M15': { 
-                accumulationPhase: 0.20,   // 20% времени (3 минуты)
-                fixedRangePercent: 0.08,   // ±0.08%
+                accumulationPhase: 1.0,    // 100% - накопление все время
+                fixedRangePercent: null,
                 minRangePercent: 0.06
             },
             'M30': { 
-                accumulationPhase: 0.17,   // 17% времени (5 минут)
-                fixedRangePercent: 0.10,   // ±0.10%
+                accumulationPhase: 1.0,    // 100% - накопление все время
+                fixedRangePercent: null,
                 minRangePercent: 0.08
             }
         };
@@ -226,9 +227,9 @@ class ChartTimeframeManager {
      * Обновить текущую свечу с новым тиком
      * Возвращает { candle, isNewCandle }
      * 
-     * 🎯 СКОЛЬЗЯЩЕЕ ОКНО ДИАПАЗОНА:
-     * - Фаза накопления (первые 15-20% времени): high/low растут как обычно
-     * - Фаза скользящего окна (остальные 80-85%): high/low "едут" вместе с ценой
+     * 🎯 УПРОЩЕННАЯ ЛОГИКА: 100% accumulation
+     * - high/low растут естественным образом как в классических биржевых свечах
+     * - Нет искусственного sliding window - более предсказуемое поведение
      */
     updateCandleWithTick(currentCandle, tick, timeframe) {
         const tickTime = tick.time;
@@ -248,111 +249,32 @@ class ChartTimeframeManager {
                 volume: tick.volume || 0
             };
             
-            // 🎯 Инициализируем данные фазы для новой свечи
-            this.candlePhaseData.set(candleStart, {
-                fixedRange: null,  // будет установлен при переходе в фазу скольжения
-                phase: 'accumulation'
+            window.errorLogger?.info('timeframe', '🆕 New candle created', {
+                timeframe,
+                candleStart,
+                tickTime,
+                price: tick.price
             });
-            
-            // Очищаем старые данные (оставляем только последние 10 свечей)
-            if (this.candlePhaseData.size > 10) {
-                const keys = Array.from(this.candlePhaseData.keys()).sort((a, b) => a - b);
-                const toDelete = keys.slice(0, -10);
-                toDelete.forEach(key => this.candlePhaseData.delete(key));
-            }
             
             return {
                 candle: newCandle,
                 isNewCandle: true
             };
         } else {
-            // Обновляем текущую свечу
-            const config = this.timeframeConfig[timeframe];
-            const phaseInfo = this.getCandlePhase(tickTime, candleStart, timeframe);
-            const phaseData = this.candlePhaseData.get(candleStart) || { fixedRange: null, phase: 'accumulation' };
+            // 📈 ОБНОВЛЕНИЕ ТЕКУЩЕЙ СВЕЧИ: классическая логика
+            // high/low растут естественным образом
+            const newHigh = Math.max(currentCandle.high, tick.price);
+            const newLow = Math.min(currentCandle.low, tick.price);
             
-            let newHigh, newLow;
-            
-            if (phaseInfo.phase === 'accumulation') {
-                // 📈 ФАЗА НАКОПЛЕНИЯ: high/low растут как обычно
-                newHigh = Math.max(currentCandle.high, tick.price);
-                newLow = Math.min(currentCandle.low, tick.price);
-                
-                phaseData.phase = 'accumulation';
-                
-                window.errorLogger?.debug('timeframe', '📈 Accumulation phase', {
-                    timeframe,
-                    progress: (phaseInfo.progress * 100).toFixed(1) + '%',
-                    high: newHigh,
-                    low: newLow,
-                    range: ((newHigh - newLow) / this.getBasePrice(currentCandle) * 100).toFixed(3) + '%'
-                });
-            } else {
-                // 🎯 ФАЗА СКОЛЬЗЯЩЕГО ОКНА
-                
-                if (phaseData.fixedRange === null) {
-                    // Первый тик в фазе скольжения - фиксируем диапазон
-                    const accumulatedRange = currentCandle.high - currentCandle.low;
-                    const basePrice = this.getBasePrice(currentCandle);
-                    const rangePercent = accumulatedRange / basePrice;
-                    
-                    // Применяем минимальный диапазон если нужно
-                    const minRangePercent = config.minRangePercent / 100;
-                    const finalRangePercent = Math.max(rangePercent, minRangePercent);
-                    
-                    phaseData.fixedRange = basePrice * finalRangePercent;
-                    phaseData.phase = 'sliding';
-                    
-                    window.errorLogger?.info('timeframe', '🎯 Sliding window activated', {
-                        timeframe,
-                        fixedRange: phaseData.fixedRange.toFixed(6),
-                        rangePercent: (finalRangePercent * 100).toFixed(3) + '%',
-                        basePrice: basePrice.toFixed(6),
-                        configuredMax: (config.fixedRangePercent).toFixed(2) + '%'
-                    });
-                    
-                    console.log(`🎯 ${timeframe} sliding window: range=${(finalRangePercent * 100).toFixed(3)}%`);
-                }
-                
-                // 🎯 СКОЛЬЗЯЩЕЕ ОКНО: high/low "едут" вместе с ценой
-                const halfRange = phaseData.fixedRange / 2;
-                newHigh = tick.price + halfRange;
-                newLow = tick.price - halfRange;
-                
-                // 📏 Финальная корректировка в последние 10% времени
-                const duration = this.getTimeframeDuration(timeframe);
-                const elapsed = tickTime - candleStart;
-                const timeLeft = duration - elapsed;
-                const percentLeft = timeLeft / duration;
-                
-                if (percentLeft <= 0.10) {
-                    // В последние 10% времени можем немного расширить/сжать (±20%)
-                    const adjustmentFactor = 1 + (Math.random() - 0.5) * 0.2;
-                    const adjustedRange = phaseData.fixedRange * adjustmentFactor;
-                    const adjustedHalf = adjustedRange / 2;
-                    
-                    newHigh = tick.price + adjustedHalf;
-                    newLow = tick.price - adjustedHalf;
-                    
-                    window.errorLogger?.debug('timeframe', '📏 Final adjustment phase', {
-                        timeframe,
-                        percentLeft: (percentLeft * 100).toFixed(1) + '%',
-                        adjustmentFactor: adjustmentFactor.toFixed(3)
-                    });
-                }
-                
-                window.errorLogger?.debug('timeframe', '🎯 Sliding window active', {
-                    timeframe,
-                    progress: (phaseInfo.progress * 100).toFixed(1) + '%',
-                    close: tick.price.toFixed(6),
-                    high: newHigh.toFixed(6),
-                    low: newLow.toFixed(6),
-                    fixedRange: phaseData.fixedRange.toFixed(6)
-                });
-            }
-            
-            // Сохраняем обновленные данные фазы
-            this.candlePhaseData.set(candleStart, phaseData);
+            window.errorLogger?.debug('timeframe', '📊 Candle updated', {
+                timeframe,
+                candleTime: currentCandle.time,
+                tickTime: tickTime,
+                close: tick.price.toFixed(6),
+                high: newHigh.toFixed(6),
+                low: newLow.toFixed(6),
+                range: ((newHigh - newLow) / this.getBasePrice(currentCandle) * 100).toFixed(3) + '%'
+            });
             
             return {
                 candle: {
