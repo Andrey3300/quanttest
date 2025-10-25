@@ -298,6 +298,8 @@ class ChartManager {
     }
 
     // 🎯 НОВОЕ: Обработка тика (обновление последней свечи) С ИНТЕРПОЛЯЦИЕЙ
+    // 🔒 ВАЖНО: Тики ТОЛЬКО обновляют существующую свечу, НЕ создают новые!
+    // Новые свечи создаются ТОЛЬКО сервером через handleNewCandle()
     handleTick(data) {
         const { price, time } = data;
 
@@ -311,71 +313,40 @@ class ChartManager {
             this.lastPriceLineUpdate = now;
         }
 
-        // Получаем длительность таймфрейма в секундах
-        const timeframeSeconds = this.getTimeframeSeconds(this.timeframe);
-        
-        // Вычисляем время ТЕКУЩЕЙ свечи (к какому периоду относится этот тик)
-        const currentCandleTime = Math.floor(time / timeframeSeconds) * timeframeSeconds;
-
-        // Проверяем последнюю свечу в массиве
+        // 🔒 БЕЗОПАСНОСТЬ: Проверяем что есть последняя свеча для обновления
         const lastCandle = this.candles[this.candles.length - 1];
+        
+        if (!lastCandle) {
+            // Свечи еще нет - ждем сервер (это нормально при первом подключении)
+            return;
+        }
 
-        // Если свечи с нужным временем нет - создаем её!
-        if (!lastCandle || lastCandle.time !== currentCandleTime) {
-            console.log(`📊 Creating new candle: ${new Date(currentCandleTime * 1000).toISOString()}`);
-            
-            const newCandle = {
-                time: currentCandleTime,
-                open: price,
-                high: price,
-                low: price,
-                close: price
-            };
+        // 🎯 ЕДИНЫЙ ИСТОЧНИК ПРАВДЫ: Обновляем ТОЛЬКО существующую свечу
+        const updatedCandle = {
+            time: lastCandle.time,
+            open: lastCandle.open,
+            high: Math.max(lastCandle.high, price),
+            low: Math.min(lastCandle.low, price),
+            close: price
+        };
 
-            this.candles.push(newCandle);
-            
-            // 🎯 УВЕЛИЧЕН ЛИМИТ: 20000 свечей (было 1000)
-            if (this.candles.length > 20000) {
-                this.candles.shift();
-            }
+        // Сохраняем в массиве
+        this.candles[this.candles.length - 1] = updatedCandle;
+        this.currentCandle = updatedCandle;
 
-            // Обновляем график напрямую (новая свеча - без интерполяции)
-            this.updateActiveSeries(newCandle, price);
-            this.currentCandle = newCandle;
-            this.currentInterpolatedCandle = { ...newCandle };
-            
-            // Останавливаем интерполяцию если была
-            if (this.animationFrameId) {
-                cancelAnimationFrame(this.animationFrameId);
-                this.animationFrameId = null;
-            }
+        // 🎯 ПЛАВНАЯ ИНТЕРПОЛЯЦИЯ: запускаем анимацию к новому состоянию
+        if (this.interpolationEnabled && this.chartType !== 'line') {
+            const fromCandle = this.currentInterpolatedCandle || lastCandle;
+            this.startInterpolation(fromCandle, updatedCandle);
+            this.lastTickTime = now;
         } else {
-            // Свеча существует - обновляем её С ИНТЕРПОЛЯЦИЕЙ
-            const updatedCandle = {
-                time: lastCandle.time,
-                open: lastCandle.open,
-                high: Math.max(lastCandle.high, price),
-                low: Math.min(lastCandle.low, price),
-                close: price
-            };
-
-            // Сохраняем в массиве
-            this.candles[this.candles.length - 1] = updatedCandle;
-            this.currentCandle = updatedCandle;
-
-            // 🎯 ПЛАВНАЯ ИНТЕРПОЛЯЦИЯ: запускаем анимацию к новому состоянию
-            if (this.interpolationEnabled && this.chartType !== 'line') {
-                const fromCandle = this.currentInterpolatedCandle || lastCandle;
-                this.startInterpolation(fromCandle, updatedCandle);
-                this.lastTickTime = now;
-            } else {
-                // Без интерполяции - обновляем напрямую
-                this.updateActiveSeries(updatedCandle, price);
-            }
+            // Без интерполяции - обновляем напрямую
+            this.updateActiveSeries(updatedCandle, price);
         }
     }
 
-    // 🎯 НОВОЕ: Обработка новой завершенной свечи С УЛУЧШЕННОЙ ВАЛИДАЦИЕЙ
+    // 🎯 НОВОЕ: Обработка новой завершенной свечи от СЕРВЕРА
+    // 🔒 ЕДИНЫЙ ИСТОЧНИК ПРАВДЫ: Только сервер создает свечи!
     handleNewCandle(data) {
         const { candle, timeframe } = data;
 
@@ -386,29 +357,23 @@ class ChartManager {
 
         // 🛡️ ВАЛИДАЦИЯ ВРЕМЕНИ: Проверяем что время - число
         if (typeof candle.time !== 'number' || isNaN(candle.time)) {
-            console.error('Invalid candle time format:', candle.time);
+            console.error('❌ Invalid candle time format:', candle.time);
             return;
         }
 
         console.log(`🕯️ New ${timeframe} candle completed:`, candle);
 
-        // Проверяем - возможно эта свеча уже есть в массиве (последняя)
+        // Проверяем последнюю свечу в массиве
         const lastCandle = this.candles[this.candles.length - 1];
         
-        // 🛡️ ЗАЩИТА ОТ ДУБЛИКАТОВ: Проверяем что новая свеча не старее последней
-        if (lastCandle && candle.time < lastCandle.time) {
-            console.warn('Ignoring outdated candle:', candle.time, 'last:', lastCandle.time);
-            return;
-        }
-        
         if (lastCandle && lastCandle.time === candle.time) {
-            // Свеча уже есть (создана тиками) - просто обновляем финальные значения
+            // 🔄 Свеча уже есть - обновляем финальные значения от сервера
             this.candles[this.candles.length - 1] = candle;
             
             // Обновляем напрямую (без интерполяции для завершенной свечи)
             this.applyTickDirectly(candle, false);
         } else {
-            // Свечи нет - добавляем
+            // ✨ Новая свеча - добавляем в конец
             this.candles.push(candle);
             
             // 🎯 УВЕЛИЧЕН ЛИМИТ: 20000 свечей (было 1000)
@@ -420,7 +385,7 @@ class ChartManager {
             this.applyTickDirectly(candle, true);
         }
 
-        // 🎯 ВАЖНО: Создаем СЛЕДУЮЩУЮ текущую свечу
+        // 🎯 ВАЖНО: Создаем СЛЕДУЮЩУЮ пустую свечу для тиков
         const timeframeSeconds = this.getTimeframeSeconds(timeframe);
         const nextCandleTime = candle.time + timeframeSeconds;
         
