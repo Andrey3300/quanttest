@@ -6,6 +6,9 @@ class ChartTimeframeManager {
         // Доступные таймфреймы
         this.timeframes = {
             'S5': 5,
+            'S10': 10,
+            'S15': 15,
+            'S30': 30,
             'M1': 60,
             'M2': 120,
             'M3': 180,

@@ -8,6 +8,9 @@ const logger = require('./errorLogger');
 // ===== TIMEFRAME CONFIGURATION =====
 const TIMEFRAMES = {
     'S5': { seconds: 5, name: '5 seconds' },
+    'S10': { seconds: 10, name: '10 seconds' },
+    'S15': { seconds: 15, name: '15 seconds' },
+    'S30': { seconds: 30, name: '30 seconds' },
     'M1': { seconds: 60, name: '1 minute' },
     'M2': { seconds: 120, name: '2 minutes' },
     'M3': { seconds: 180, name: '3 minutes' },
