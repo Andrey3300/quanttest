@@ -269,17 +269,20 @@ app.post('/api/switch-account', authenticateToken, (req, res) => {
 // ===== CHART API =====
 
 // Получение исторических данных графика
+// 🎯 MULTI-TIMEFRAME: Поддержка timeframe параметра
 app.get('/api/chart/history', (req, res) => {
   try {
     const symbol = req.query.symbol || 'USD_MXN';
+    const timeframe = req.query.timeframe || 'S5'; // 🎯 НОВОЕ
     const from = req.query.from ? parseInt(req.query.from) : null;
     const to = req.query.to ? parseInt(req.query.to) : null;
     
-    const generator = getGenerator(symbol);
+    const generator = getGenerator(symbol, timeframe); // 🎯 НОВОЕ
     const data = generator.getHistoricalData(from, to);
     
     res.json({
       symbol,
+      timeframe, // 🎯 НОВОЕ
       data
     });
   } catch (error) {
@@ -288,20 +291,22 @@ app.get('/api/chart/history', (req, res) => {
   }
 });
 
-// 🎯 НОВЫЙ ENDPOINT: Получение текущего состояния свечи (для синхронизации при смене актива)
+// 🎯 ENDPOINT: Получение текущего состояния свечи (для синхронизации при смене актива)
+// 🎯 MULTI-TIMEFRAME: Поддержка timeframe
 app.get('/api/chart/current-state/:symbol', (req, res) => {
   try {
     const symbol = req.params.symbol;
+    const timeframe = req.query.timeframe || 'S5'; // 🎯 НОВОЕ
     
     if (!symbol) {
       return res.status(400).json({ error: 'Symbol is required' });
     }
     
-    const generator = getGenerator(symbol);
+    const generator = getGenerator(symbol, timeframe); // 🎯 НОВОЕ
     
     // Проверяем что генератор инициализирован
     if (!generator.candles || generator.candles.length === 0) {
-      logger.warn('api', 'Generator not initialized for current-state request', { symbol });
+      logger.warn('api', 'Generator not initialized for current-state request', { symbol, timeframe });
       return res.status(503).json({ error: 'Generator not ready yet' });
     }
     
@@ -311,6 +316,7 @@ app.get('/api/chart/current-state/:symbol', (req, res) => {
     
     logger.debug('api', 'Current state requested', {
       symbol,
+      timeframe, // 🎯 НОВОЕ
       lastCandleTime: lastCandle.time,
       currentStateTime: currentState.time,
       currentPrice: generator.currentPrice
@@ -318,6 +324,7 @@ app.get('/api/chart/current-state/:symbol', (req, res) => {
     
     res.json({
       symbol,
+      timeframe, // 🎯 НОВОЕ
       lastCandle,
       currentState,
       currentPrice: generator.currentPrice,
@@ -328,6 +335,7 @@ app.get('/api/chart/current-state/:symbol', (req, res) => {
     console.error('Current state error:', error);
     logger.error('api', 'Failed to get current state', {
       symbol: req.params.symbol,
+      timeframe: req.query.timeframe,
       error: error.message
     });
     res.status(500).json({ error: 'Failed to fetch current state' });
@@ -346,13 +354,13 @@ console.log('✅ All chart generators are running!');
 // Создание WebSocket сервера
 const wss = new WebSocket.Server({ server, path: '/ws/chart' });
 
-// Хранение активных подписок
-const subscriptions = new Map(); // symbol -> Set of WebSocket connections
+// 🎯 MULTI-TIMEFRAME: Хранение активных подписок по "symbol:timeframe"
+const subscriptions = new Map(); // "symbol:timeframe" -> Set of WebSocket connections
 
 wss.on('connection', (ws, req) => {
   logger.debug('websocket', 'New WebSocket connection');
   
-  let currentSymbol = null;
+  let currentSubscription = null; // "symbol:timeframe"
   
   ws.on('message', (message) => {
     try {
@@ -360,47 +368,49 @@ wss.on('connection', (ws, req) => {
       
       if (data.type === 'subscribe') {
         const symbol = data.symbol || 'USD_MXN';
+        const timeframe = data.timeframe || 'S5'; // 🎯 НОВОЕ
+        const subscriptionKey = `${symbol}:${timeframe}`;
         
-        // Отписываемся от предыдущего символа
-        if (currentSymbol && subscriptions.has(currentSymbol)) {
-          subscriptions.get(currentSymbol).delete(ws);
-          logger.debug('websocket', `Client unsubscribed from ${currentSymbol} (auto)`);
+        // Отписываемся от предыдущей подписки
+        if (currentSubscription && subscriptions.has(currentSubscription)) {
+          subscriptions.get(currentSubscription).delete(ws);
+          logger.debug('websocket', `Client unsubscribed from ${currentSubscription} (auto)`);
         }
         
-        // Подписываемся на новый символ
-        currentSymbol = symbol;
-        if (!subscriptions.has(symbol)) {
-          subscriptions.set(symbol, new Set());
+        // Подписываемся на новый symbol:timeframe
+        currentSubscription = subscriptionKey;
+        if (!subscriptions.has(subscriptionKey)) {
+          subscriptions.set(subscriptionKey, new Set());
         }
-        subscriptions.get(symbol).add(ws);
+        subscriptions.get(subscriptionKey).add(ws);
         
-        logger.debug('websocket', `Client subscribed to ${symbol}`);
+        logger.debug('websocket', `Client subscribed to ${subscriptionKey}`);
         
         // Отправляем подтверждение
         ws.send(JSON.stringify({
           type: 'subscribed',
-          symbol
+          symbol,
+          timeframe // 🎯 НОВОЕ
         }));
       } else if (data.type === 'unsubscribe') {
-
-        // УЛУЧШЕНИЕ: Явная обработка unsubscribe
-
-
         const symbol = data.symbol;
+        const timeframe = data.timeframe || 'S5'; // 🎯 НОВОЕ
+        const subscriptionKey = `${symbol}:${timeframe}`;
         
-        if (symbol && subscriptions.has(symbol)) {
-          subscriptions.get(symbol).delete(ws);
-          logger.debug('websocket', `Client explicitly unsubscribed from ${symbol}`);
+        if (subscriptionKey && subscriptions.has(subscriptionKey)) {
+          subscriptions.get(subscriptionKey).delete(ws);
+          logger.debug('websocket', `Client explicitly unsubscribed from ${subscriptionKey}`);
           
           // Отправляем подтверждение
           ws.send(JSON.stringify({
             type: 'unsubscribed',
-            symbol
+            symbol,
+            timeframe // 🎯 НОВОЕ
           }));
         }
         
-        if (currentSymbol === symbol) {
-          currentSymbol = null;
+        if (currentSubscription === subscriptionKey) {
+          currentSubscription = null;
         }
       }
     } catch (error) {
@@ -410,8 +420,8 @@ wss.on('connection', (ws, req) => {
   
   ws.on('close', () => {
     // Удаляем подписку при отключении
-    if (currentSymbol && subscriptions.has(currentSymbol)) {
-      subscriptions.get(currentSymbol).delete(ws);
+    if (currentSubscription && subscriptions.has(currentSubscription)) {
+      subscriptions.get(currentSubscription).delete(ws);
     }
     logger.debug('websocket', 'WebSocket connection closed');
   });
@@ -425,20 +435,29 @@ wss.on('connection', (ws, req) => {
 let isCreatingNewCandle = false;
 
 // Плавные обновления текущей свечи (тики) каждые 250ms для комфортной скорости (4 тика в секунду)
-// Клиент использует интерполяцию для плавных переходов между тиками
+// 🎯 MULTI-TIMEFRAME: Тики отправляются ТОЛЬКО для S5 генераторов
+// Для остальных таймфреймов отправляются только завершенные свечи
 setInterval(() => {
   // Не отправляем тики, если создается новая свеча
   if (isCreatingNewCandle) {
     return;
   }
   
-  subscriptions.forEach((clients, symbol) => {
+  subscriptions.forEach((clients, subscriptionKey) => {
     if (clients.size > 0) {
-      const generator = getGenerator(symbol);
+      // Парсим "symbol:timeframe"
+      const [symbol, timeframe] = subscriptionKey.split(':');
+      
+      // 🎯 ВАЖНО: Тики отправляем ТОЛЬКО для S5
+      if (timeframe !== 'S5') {
+        return; // Для других таймфреймов тики не отправляются
+      }
+      
+      const generator = getGenerator(symbol, timeframe);
       
       // ЗАЩИТА: Проверяем что генератор инициализирован с данными
       if (!generator.candles || generator.candles.length === 0) {
-        logger.warn('websocket', 'Generator not initialized, skipping tick', { symbol });
+        logger.warn('websocket', 'Generator not initialized, skipping tick', { symbol, timeframe });
         return;
       }
       
@@ -448,7 +467,8 @@ setInterval(() => {
       const validation = generator.validateCandleAnomaly(updatedCandle, 'websocket-tick');
       if (!validation.valid) {
         logger.error('websocket', '🚨 TICK VALIDATION FAILED - skipping send', {
-          symbol: symbol,
+          symbol,
+          timeframe,
           reason: validation.reason,
           candle: updatedCandle
         });
@@ -458,7 +478,8 @@ setInterval(() => {
       // Дополнительная проверка: убедимся что время - это число
       if (typeof updatedCandle.time !== 'number' || isNaN(updatedCandle.time)) {
         logger.error('websocket', 'Invalid tick time format', { 
-          symbol: symbol,
+          symbol,
+          timeframe,
           candle: updatedCandle
         });
         return;
@@ -467,6 +488,7 @@ setInterval(() => {
       const message = JSON.stringify({
         type: 'tick',
         symbol,
+        timeframe, // 🎯 НОВОЕ
         data: updatedCandle
       });
       
@@ -504,171 +526,126 @@ function scheduleNextCandleCreation() {
   }, delayUntilNextCandle);
 }
 
-// Функция создания свечей вынесена отдельно
+// 🎯 MULTI-TIMEFRAME: Функция создания свечей для всех таймфреймов (IQCent style)
 function createNewCandlesForAllSymbols() {
   // Блокируем отправку тиков
   isCreatingNewCandle = true;
   
-  // РЕШЕНИЕ #5: Логируем начало создания новых свечей
   const startTime = Date.now();
   const totalSymbols = Object.keys(SYMBOL_CONFIG).length;
   
-  logger.debug('websocket', 'Creating new candles for ALL symbols (24/7)', {
+  logger.debug('websocket', '🎯 Creating new S5 candles and aggregating to all timeframes', {
     totalSymbols: totalSymbols,
-    symbolsWithSubscribers: subscriptions.size,
+    subscriptions: subscriptions.size,
     timestamp: startTime
   });
   
-  // КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: Генерируем свечи для ВСЕХ символов, не только с подписчиками
+  const { TIMEFRAMES } = require('./chartGenerator');
+  const timeframeKeys = Object.keys(TIMEFRAMES);
+  
+  // Генерируем новую S5 свечу для каждого символа + агрегируем в другие таймфреймы
   Object.keys(SYMBOL_CONFIG).forEach(symbol => {
-    const generator = getGenerator(symbol);
+    // 1️⃣ Генерируем базовую S5 свечу
+    const s5Generator = getGenerator(symbol, 'S5');
     
-    // ЗАЩИТА: Проверяем что генератор инициализирован с данными
-    if (!generator.candles || generator.candles.length === 0) {
-      logger.warn('websocket', 'Generator not initialized, skipping new candle', { symbol });
+    // ЗАЩИТА: Проверяем что S5 генератор инициализирован
+    if (!s5Generator || !s5Generator.candles || s5Generator.candles.length === 0) {
+      logger.warn('websocket', 'S5 Generator not initialized, skipping', { symbol });
       return;
     }
     
-    const newCandle = generator.generateNextCandle();
+    // Генерируем новую S5 свечу
+    const s5Candle = s5Generator.generateNextCandle();
     
-    // 🛡️ ВАЛИДАЦИЯ: Проверяем новую свечу на аномалии перед отправкой
-    const validation = generator.validateCandleAnomaly(newCandle, 'websocket-newCandle');
-    if (!validation.valid) {
-      logger.error('websocket', '🚨 NEW CANDLE VALIDATION FAILED - skipping send', {
-        symbol: symbol,
-        reason: validation.reason,
-        candle: newCandle
+    // 🛡️ ВАЛИДАЦИЯ S5 свечи
+    const s5Validation = s5Generator.validateCandleAnomaly(s5Candle, 'websocket-newCandle');
+    if (!s5Validation.valid) {
+      logger.error('websocket', '🚨 S5 CANDLE VALIDATION FAILED', {
+        symbol,
+        reason: s5Validation.reason
       });
-      // НЕ ОТПРАВЛЯЕМ аномальную свечу клиентам, но она уже в массиве generator.candles
-      // Это нормально - генератор продолжит работать, клиенты не получат аномалию
-      return;
+      return; // Пропускаем весь символ если S5 невалидна
     }
     
-    // Отправляем клиентам ТОЛЬКО если есть подписчики
-    const clients = subscriptions.get(symbol);
-    if (!clients || clients.size === 0) {
-      // Нет подписчиков - просто логируем
-      logger.debug('websocket', 'New candle generated (no subscribers)', {
-        symbol: symbol,
-        time: newCandle.time,
-        candleCount: generator.candles.length
+    // 2️⃣ Отправляем S5 свечу подписчикам S5
+    const s5SubscriptionKey = `${symbol}:S5`;
+    const s5Clients = subscriptions.get(s5SubscriptionKey);
+    if (s5Clients && s5Clients.size > 0) {
+      const s5Message = JSON.stringify({
+        type: 'newCandle',
+        symbol,
+        timeframe: 'S5',
+        data: s5Candle
       });
-      return;
-    }
-    
-    // Проверка: убедимся что время - это число
-    if (typeof newCandle.time !== 'number' || isNaN(newCandle.time)) {
-      logger.error('websocket', 'Invalid new candle time format', { 
-        symbol: symbol,
-        candle: newCandle
-      });
-      return;
-    }
-    
-    // 🛡️ КРИТИЧЕСКАЯ ВАЛИДАЦИЯ: Проверяем timestamp и непрерывность перед отправкой
-    const allCandles = generator.candles;
-    if (allCandles.length >= 2) {
-      const previousCandle = allCandles[allCandles.length - 2]; // Предпоследняя свеча
-      const currentCandle = allCandles[allCandles.length - 1];  // Последняя свеча (новая)
       
-      // 🚨 КРИТИЧНО: Проверяем что timestamp строго больше предыдущего
-      if (currentCandle.time <= previousCandle.time) {
-        logger.error('websocket', '🚨 DUPLICATE TIMESTAMP DETECTED - skipping send!', {
-          symbol: symbol,
-          previousTime: previousCandle.time,
-          currentTime: currentCandle.time,
-          previousTimeISO: new Date(previousCandle.time * 1000).toISOString(),
-          currentTimeISO: new Date(currentCandle.time * 1000).toISOString()
-        });
-        console.error(`🚨 DUPLICATE TIMESTAMP for ${symbol}: current=${currentCandle.time} <= previous=${previousCandle.time}`);
-        return; // НЕ ОТПРАВЛЯЕМ свечу с дубликатом времени
-      }
-      
-      // Используем небольшой порог для учета погрешности округления
-      const epsilon = 0.0000001;
-      const priceDiff = Math.abs(currentCandle.open - previousCandle.close);
-      
-      if (priceDiff > epsilon) {
-        logger.error('websocket', '❌ CONTINUITY BROKEN before sending!', {
-          symbol: symbol,
-          previousTime: previousCandle.time,
-          previousClose: previousCandle.close,
-          currentTime: currentCandle.time,
-          currentOpen: currentCandle.open,
-          difference: priceDiff
-        });
-        console.error(`❌ CONTINUITY BROKEN for ${symbol}: prev.close=${previousCandle.close} !== current.open=${currentCandle.open}, diff=${priceDiff}`);
-        
-        // 🔧 АВТОКОРРЕКЦИЯ: Исправляем open текущей свечи
-        logger.warn('websocket', 'Auto-correcting candle open price', {
-          symbol: symbol,
-          oldOpen: currentCandle.open,
-          newOpen: previousCandle.close
-        });
-        currentCandle.open = previousCandle.close;
-        
-        // Также корректируем high и low если нужно
-        if (currentCandle.high < currentCandle.open) {
-          currentCandle.high = currentCandle.open;
+      s5Clients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(s5Message);
         }
-        if (currentCandle.low > currentCandle.open) {
-          currentCandle.low = currentCandle.open;
-        }
-        
-        // Обновляем newCandle для отправки
-        newCandle.open = currentCandle.open;
-        newCandle.high = currentCandle.high;
-        newCandle.low = currentCandle.low;
-        
-        logger.info('websocket', '✅ Continuity auto-corrected', {
-          symbol: symbol,
-          correctedOpen: newCandle.open
-        });
-      } else {
-        logger.debug('websocket', '✅ Continuity verified before sending', {
-          symbol: symbol,
-          price: currentCandle.open
-        });
-      }
-    }
-    
-    // РЕШЕНИЕ #5: Валидация OHLC перед отправкой
-    const isValidOHLC = newCandle.high >= newCandle.low &&
-                        newCandle.high >= newCandle.open &&
-                        newCandle.high >= newCandle.close &&
-                        newCandle.low <= newCandle.open &&
-                        newCandle.low <= newCandle.close;
-    
-    if (!isValidOHLC) {
-      logger.error('websocket', 'Invalid OHLC data in new candle', {
-        symbol: symbol,
-        candle: newCandle
       });
-      return;
+      
+      logger.debug('websocket', 'S5 candle sent', {
+        symbol,
+        time: s5Candle.time,
+        clientCount: s5Clients.size
+      });
     }
     
-    const message = JSON.stringify({
-      type: 'newCandle',
-      symbol,
-      data: newCandle
-    });
-    
-    // Отправляем всем подписанным клиентам
-    let sentCount = 0;
-    clients.forEach(client => {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(message);
-        sentCount++;
+    // 3️⃣ Агрегируем S5 свечу во все другие таймфреймы
+    timeframeKeys.forEach(timeframe => {
+      if (timeframe === 'S5') return; // S5 уже обработан
+      
+      const tfGenerator = getGenerator(symbol, timeframe);
+      if (!tfGenerator || !tfGenerator.aggregator) {
+        logger.warn('websocket', 'Aggregated generator not initialized', { symbol, timeframe });
+        return;
+      }
+      
+      // Агрегируем S5 свечу
+      const aggregationResult = tfGenerator.aggregateS5Candle(s5Candle);
+      if (!aggregationResult) return;
+      
+      // Если свеча завершилась - отправляем подписчикам
+      if (aggregationResult.isNewCandle && aggregationResult.completed) {
+        const tfSubscriptionKey = `${symbol}:${timeframe}`;
+        const tfClients = subscriptions.get(tfSubscriptionKey);
+        
+        if (tfClients && tfClients.size > 0) {
+          const completedCandle = aggregationResult.completed;
+          
+          // Валидация агрегированной свечи
+          const tfValidation = tfGenerator.validateCandleAnomaly(completedCandle, 'aggregated-candle');
+          if (!tfValidation.valid) {
+            logger.error('websocket', '🚨 AGGREGATED CANDLE VALIDATION FAILED', {
+              symbol,
+              timeframe,
+              reason: tfValidation.reason
+            });
+            return;
+          }
+          
+          const tfMessage = JSON.stringify({
+            type: 'newCandle',
+            symbol,
+            timeframe,
+            data: completedCandle
+          });
+          
+          tfClients.forEach(client => {
+            if (client.readyState === WebSocket.OPEN) {
+              client.send(tfMessage);
+            }
+          });
+          
+          logger.debug('websocket', `${timeframe} candle completed and sent`, {
+            symbol,
+            timeframe,
+            time: completedCandle.time,
+            clientCount: tfClients.size
+          });
+        }
       }
     });
-    
-    logger.logCandle('New candle sent to clients', symbol, newCandle);
-    logger.debug('websocket', 'New candle broadcast complete', {
-      symbol: symbol,
-      time: newCandle.time,
-      clientCount: sentCount
-    });
-    // Убран спам в консоль - детали в логе
   });
   
   // ИСПРАВЛЕНИЕ: Уменьшаем задержку до 200ms для более точного тайминга
