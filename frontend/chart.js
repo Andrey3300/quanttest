@@ -291,14 +291,46 @@ class ChartManager {
         // Обновляем текущую цену
         this.currentPrice = price;
 
-        // Обновляем линию цены
-        this.updatePriceLine(price);
+        // Обновляем линию цены (раз в секунду, не каждый тик!)
+        const now = Date.now();
+        if (!this.lastPriceLineUpdate || now - this.lastPriceLineUpdate > 1000) {
+            this.updatePriceLine(price);
+            this.lastPriceLineUpdate = now;
+        }
 
-        // Обновляем последнюю свечу тиком
-        if (this.candles.length > 0) {
-            const lastCandle = this.candles[this.candles.length - 1];
+        // Получаем длительность таймфрейма в секундах
+        const timeframeSeconds = this.getTimeframeSeconds(this.timeframe);
+        
+        // Вычисляем время ТЕКУЩЕЙ свечи (к какому периоду относится этот тик)
+        const currentCandleTime = Math.floor(time / timeframeSeconds) * timeframeSeconds;
 
-            // Создаем обновленную свечу
+        // Проверяем последнюю свечу в массиве
+        const lastCandle = this.candles[this.candles.length - 1];
+
+        // Если свечи с нужным временем нет - создаем её!
+        if (!lastCandle || lastCandle.time !== currentCandleTime) {
+            console.log(`📊 Creating new candle: ${new Date(currentCandleTime * 1000).toISOString()}`);
+            
+            const newCandle = {
+                time: currentCandleTime,
+                open: price,
+                high: price,
+                low: price,
+                close: price
+            };
+
+            this.candles.push(newCandle);
+            
+            // Ограничиваем размер массива
+            if (this.candles.length > 1000) {
+                this.candles.shift();
+            }
+
+            // Обновляем график (только активную серию!)
+            this.updateActiveSeries(newCandle, price);
+            this.currentCandle = newCandle;
+        } else {
+            // Свеча существует - обновляем её
             const updatedCandle = {
                 time: lastCandle.time,
                 open: lastCandle.open,
@@ -307,10 +339,8 @@ class ChartManager {
                 close: price
             };
 
-            // Обновляем на графике
-            this.candleSeries.update(updatedCandle);
-            this.lineSeries.update({ time: updatedCandle.time, value: price });
-            this.barSeries.update(updatedCandle);
+            // Обновляем график (только активную серию!)
+            this.updateActiveSeries(updatedCandle, price);
 
             // Сохраняем в массиве
             this.candles[this.candles.length - 1] = updatedCandle;
@@ -327,40 +357,68 @@ class ChartManager {
             return;
         }
 
-        console.log(`🕯️ New ${timeframe} candle:`, candle);
+        console.log(`🕯️ New ${timeframe} candle completed:`, candle);
 
-        // Добавляем свечу
-        this.candles.push(candle);
-
-        // Ограничиваем размер массива
-        if (this.candles.length > 1000) {
-            this.candles.shift();
+        // Проверяем - возможно эта свеча уже есть в массиве (последняя)
+        const lastCandle = this.candles[this.candles.length - 1];
+        
+        if (lastCandle && lastCandle.time === candle.time) {
+            // Свеча уже есть (создана тиками) - просто обновляем финальные значения
+            this.candles[this.candles.length - 1] = candle;
+            this.updateActiveSeries(candle, candle.close);
+        } else {
+            // Свечи нет - добавляем
+            this.candles.push(candle);
+            
+            // Ограничиваем размер массива
+            if (this.candles.length > 1000) {
+                this.candles.shift();
+            }
+            
+            this.updateActiveSeries(candle, candle.close);
         }
 
-        // Обновляем график
-        this.candleSeries.update(candle);
-        this.lineSeries.update({ time: candle.time, value: candle.close });
-        this.barSeries.update(candle);
+        // 🎯 ВАЖНО: Создаем СЛЕДУЮЩУЮ текущую свечу
+        const timeframeSeconds = this.getTimeframeSeconds(timeframe);
+        const nextCandleTime = candle.time + timeframeSeconds;
+        
+        // Проверяем что следующей свечи еще нет
+        const lastCandleAfter = this.candles[this.candles.length - 1];
+        if (!lastCandleAfter || lastCandleAfter.time < nextCandleTime) {
+            const nextCandle = {
+                time: nextCandleTime,
+                open: candle.close,
+                high: candle.close,
+                low: candle.close,
+                close: candle.close
+            };
+            
+            this.candles.push(nextCandle);
+            this.updateActiveSeries(nextCandle, candle.close);
+            this.currentCandle = nextCandle;
+            
+            console.log(`📊 Created next candle: ${new Date(nextCandleTime * 1000).toISOString()}`);
+        }
     }
 
-    // Обновление линии текущей цены
+    // Обновление линии текущей цены (оптимизировано!)
     updatePriceLine(price) {
         if (!price || !this.candleSeries) return;
 
-        // Удаляем старую линию
-        if (this.expirationPriceLine) {
-            this.candleSeries.removePriceLine(this.expirationPriceLine);
+        // Если линии нет - создаем один раз
+        if (!this.expirationPriceLine) {
+            this.expirationPriceLine = this.candleSeries.createPriceLine({
+                price: price,
+                color: '#2962FF',
+                lineWidth: 2,
+                lineStyle: LightweightCharts.LineStyle.Solid,
+                axisLabelVisible: true,
+                title: '',
+            });
+        } else {
+            // Обновляем существующую линию (быстро!)
+            this.expirationPriceLine.applyOptions({ price: price });
         }
-
-        // Создаем новую линию
-        this.expirationPriceLine = this.candleSeries.createPriceLine({
-            price: price,
-            color: '#2962FF',
-            lineWidth: 2,
-            lineStyle: LightweightCharts.LineStyle.Solid,
-            axisLabelVisible: true,
-            title: '',
-        });
     }
 
     // 🎯 НОВОЕ: Смена таймфрейма (просто загружаем другой JSON!)
@@ -446,6 +504,39 @@ class ChartManager {
                 <div class="expiration-timer">${formattedTime}</div>
             </div>
         `;
+    }
+
+    // 🎯 Обновить только активную серию графика (оптимизация!)
+    updateActiveSeries(candle, price) {
+        if (!candle) return;
+
+        // Обновляем только видимую серию в зависимости от типа графика
+        if (this.chartType === 'line') {
+            this.lineSeries.update({ time: candle.time, value: price });
+        } else if (this.chartType === 'bars') {
+            this.barSeries.update(candle);
+        } else {
+            // candles (по умолчанию)
+            this.candleSeries.update(candle);
+        }
+    }
+
+    // 🎯 Получить длительность таймфрейма в секундах
+    getTimeframeSeconds(timeframe) {
+        const timeframes = {
+            'S5': 5,
+            'S10': 10,
+            'S15': 15,
+            'S30': 30,
+            'M1': 60,
+            'M2': 120,
+            'M3': 180,
+            'M5': 300,
+            'M10': 600,
+            'M15': 900,
+            'M30': 1800
+        };
+        return timeframes[timeframe] || 5;
     }
 
     // Обработка ресайза
