@@ -473,9 +473,10 @@ wss.on('connection', (ws, req) => {
 // Флаг для блокировки тиков во время создания новой свечи
 let isCreatingNewCandle = false;
 
-// Плавные обновления текущей свечи (тики) каждые 250ms для комфортной скорости (4 тика в секунду)
-// 🎯 MULTI-TIMEFRAME: Тики отправляются ТОЛЬКО для S5 генераторов
-// Для остальных таймфреймов отправляются только завершенные свечи
+// 🔥 УЛУЧШЕНИЕ: Плавные обновления текущей свечи (тики) для ВСЕХ таймфреймов
+// Каждые 250ms отправляем текущее состояние свечи (4 обновления в секунду)
+// 🎯 S5: используем generateCandleTick() для микро-колебаний
+// 🎯 M3/M5/M10+: используем currentCandleState из агрегатора (реальное состояние)
 setInterval(() => {
   // Не отправляем тики, если создается новая свеча
   if (isCreatingNewCandle) {
@@ -483,63 +484,76 @@ setInterval(() => {
   }
   
   subscriptions.forEach((clients, subscriptionKey) => {
-    if (clients.size > 0) {
-      // Парсим "symbol:timeframe"
-      const [symbol, timeframe] = subscriptionKey.split(':');
-      
-      // 🎯 ВАЖНО: Тики отправляем ТОЛЬКО для S5
-      if (timeframe !== 'S5') {
-        return; // Для других таймфреймов тики не отправляются
-      }
-      
-      const generator = getGenerator(symbol, timeframe);
-      
-      // ЗАЩИТА: Проверяем что генератор инициализирован с данными
-      if (!generator.candles || generator.candles.length === 0) {
-        logger.warn('websocket', 'Generator not initialized, skipping tick', { symbol, timeframe });
-        return;
-      }
-      
-      const updatedCandle = generator.generateCandleTick();
-      
-      // 🛡️ ВАЛИДАЦИЯ: Проверяем свечу на аномалии перед отправкой
-      const validation = generator.validateCandleAnomaly(updatedCandle, 'websocket-tick');
-      if (!validation.valid) {
-        logger.error('websocket', '🚨 TICK VALIDATION FAILED - skipping send', {
-          symbol,
-          timeframe,
-          reason: validation.reason,
-          candle: updatedCandle
-        });
-        return; // НЕ ОТПРАВЛЯЕМ аномальный тик
-      }
-      
-      // Дополнительная проверка: убедимся что время - это число
-      if (typeof updatedCandle.time !== 'number' || isNaN(updatedCandle.time)) {
-        logger.error('websocket', 'Invalid tick time format', { 
-          symbol,
-          timeframe,
-          candle: updatedCandle
-        });
-        return;
-      }
-      
-      const message = JSON.stringify({
-        type: 'tick',
-        symbol,
-        timeframe, // 🎯 НОВОЕ
-        data: updatedCandle
-      });
-      
-      // Отправляем всем подписанным клиентам
-      clients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN) {
-          client.send(message);
-        }
-      });
+    if (clients.size === 0) return;
+    
+    // Парсим "symbol:timeframe"
+    const [symbol, timeframe] = subscriptionKey.split(':');
+    const generator = getGenerator(symbol, timeframe);
+    
+    // ЗАЩИТА: Проверяем что генератор инициализирован с данными
+    if (!generator || !generator.candles || generator.candles.length === 0) {
+      logger.warn('websocket', 'Generator not initialized, skipping tick', { symbol, timeframe });
+      return;
     }
+    
+    let updatedCandle;
+    
+    // 🎯 Для S5: генерируем микро-тики для плавности
+    if (timeframe === 'S5') {
+      updatedCandle = generator.generateCandleTick();
+    } 
+    // 🎯 Для M3, M5, M10+: берем текущее состояние агрегированной свечи
+    else {
+      // Берем текущее состояние из агрегатора
+      if (generator.currentCandleState) {
+        updatedCandle = { ...generator.currentCandleState };
+      } else if (generator.aggregator && generator.aggregator.currentAggregatedCandle) {
+        updatedCandle = { ...generator.aggregator.currentAggregatedCandle };
+      } else {
+        // Fallback: последняя свеча если нет текущего состояния
+        const lastCandle = generator.candles[generator.candles.length - 1];
+        if (!lastCandle) return;
+        updatedCandle = { ...lastCandle };
+      }
+    }
+    
+    // 🛡️ ВАЛИДАЦИЯ: Проверяем свечу на аномалии перед отправкой
+    const validation = generator.validateCandleAnomaly(updatedCandle, 'websocket-tick');
+    if (!validation.valid) {
+      logger.error('websocket', '🚨 TICK VALIDATION FAILED - skipping send', {
+        symbol,
+        timeframe,
+        reason: validation.reason,
+        candle: updatedCandle
+      });
+      return; // НЕ ОТПРАВЛЯЕМ аномальный тик
+    }
+    
+    // Дополнительная проверка: убедимся что время - это число
+    if (typeof updatedCandle.time !== 'number' || isNaN(updatedCandle.time)) {
+      logger.error('websocket', 'Invalid tick time format', { 
+        symbol,
+        timeframe,
+        candle: updatedCandle
+      });
+      return;
+    }
+    
+    const message = JSON.stringify({
+      type: 'tick',
+      symbol,
+      timeframe,
+      data: updatedCandle
+    });
+    
+    // Отправляем всем подписанным клиентам
+    clients.forEach(client => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(message);
+      }
+    });
   });
-}, 250); // каждые 250ms (4 тика в секунду) + интерполяция на клиенте = плавная визуализация
+}, 250); // каждые 250ms (4 обновления в секунду) + интерполяция на клиенте = плавная визуализация
 
 // ИСПРАВЛЕНИЕ: Точная синхронизация создания свечей с системным временем
 // Вместо простого setInterval используем выравнивание по сетке времени
