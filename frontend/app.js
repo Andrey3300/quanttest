@@ -151,7 +151,7 @@ function showTradingPage() {
                     });
                 }
             });
-            window.chartManager.connectWebSocket('USD_MXN_OTC');
+            window.chartManager.connectWebSocket('USD_MXN_OTC', chartTimeframe);
         }, 200);
     }
 }

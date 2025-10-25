@@ -571,33 +571,42 @@ class ChartManager {
     }
 
     // Подключение к WebSocket (переиспользуем соединение)
-    connectWebSocket(symbol) {
+    // 🎯 MULTI-TIMEFRAME: Поддержка подписки на symbol:timeframe
+    connectWebSocket(symbol, timeframe = null) {
         const wsUrl = window.location.origin.includes('localhost')
             ? 'ws://localhost:3001/ws/chart'
             : `ws://${window.location.host}/ws/chart`;
+
+        // Используем текущий таймфрейм если не передан явно
+        const targetTimeframe = timeframe || this.timeframe || 'S5';
 
         try {
             // ПРОБЛЕМА WebSocket РЕШЕНА: Переиспользуем одно соединение
             // Если соединение уже есть и оно активно, просто меняем подписку
             if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                window.errorLogger?.info('websocket', 'Reusing existing connection for symbol change', { 
+                window.errorLogger?.info('websocket', 'Reusing existing connection for subscription change', { 
                     oldSymbol: this.symbol,
-                    newSymbol: symbol
+                    newSymbol: symbol,
+                    oldTimeframe: this.timeframe,
+                    newTimeframe: targetTimeframe
                 });
                 
-                // Явный unsubscribe от старого символа
-                if (this.symbol && this.symbol !== symbol) {
+                // Явный unsubscribe от старой подписки symbol:timeframe
+                if (this.symbol && (this.symbol !== symbol || this.timeframe !== targetTimeframe)) {
                     this.ws.send(JSON.stringify({
                         type: 'unsubscribe',
-                        symbol: this.symbol
+                        symbol: this.symbol,
+                        timeframe: this.timeframe
                     }));
                 }
                 
-                // Подписываемся на новый символ
+                // Подписываемся на новый symbol:timeframe
                 this.symbol = symbol;
+                this.timeframe = targetTimeframe;
                 this.ws.send(JSON.stringify({
                     type: 'subscribe',
-                    symbol: symbol
+                    symbol: symbol,
+                    timeframe: targetTimeframe
                 }));
                 return;
             }
@@ -625,12 +634,15 @@ class ChartManager {
             });
 
             this.ws.onopen = () => {
-                window.errorLogger?.info('websocket', 'WebSocket connected', { symbol });
-                console.log('WebSocket connected');
-                // Подписываемся на символ
+                window.errorLogger?.info('websocket', 'WebSocket connected', { symbol, timeframe: targetTimeframe });
+                console.log(`WebSocket connected for ${symbol}:${targetTimeframe}`);
+                // Подписываемся на symbol:timeframe
+                this.symbol = symbol;
+                this.timeframe = targetTimeframe;
                 this.ws.send(JSON.stringify({
                     type: 'subscribe',
-                    symbol: symbol
+                    symbol: symbol,
+                    timeframe: targetTimeframe
                 }));
             };
 
@@ -648,18 +660,20 @@ class ChartManager {
                     const message = JSON.parse(event.data);
 
                     if (message.type === 'subscribed') {
-                        console.log(`Subscribed to ${message.symbol}`);
+                        console.log(`Subscribed to ${message.symbol}:${message.timeframe || 'S5'}`);
                         window.errorLogger?.info('websocket', 'Subscription confirmed', { 
                             symbol: message.symbol,
+                            timeframe: message.timeframe,
                             connectionId: currentConnectionId
                         });
                     } else if (message.type === 'unsubscribed') {
-                        console.log(`Unsubscribed from ${message.symbol}`);
+                        console.log(`Unsubscribed from ${message.symbol}:${message.timeframe || 'S5'}`);
                         window.errorLogger?.info('websocket', 'Unsubscription confirmed', { 
-                            symbol: message.symbol
+                            symbol: message.symbol,
+                            timeframe: message.timeframe
                         });
             } else if (message.type === 'tick') {
-                // 🛡️ ЗАЩИТА ОТ СМЕШИВАНИЯ АКТИВОВ: Проверяем что тик от правильного символа
+                // 🛡️ ЗАЩИТА ОТ СМЕШИВАНИЯ: Проверяем что тик от правильного symbol:timeframe
                 if (message.symbol && message.symbol !== this.symbol) {
                     window.errorLogger?.warn('websocket', '🚨 Tick from wrong symbol - REJECTED', {
                         expectedSymbol: this.symbol,
@@ -670,6 +684,15 @@ class ChartManager {
                     return; // НЕ ОБРАБАТЫВАЕМ тик от другого символа
                 }
                 
+                // 🎯 MULTI-TIMEFRAME: Проверяем что тик от правильного таймфрейма
+                if (message.timeframe && message.timeframe !== this.timeframe) {
+                    window.errorLogger?.warn('websocket', '🚨 Tick from wrong timeframe - REJECTED', {
+                        expectedTimeframe: this.timeframe,
+                        receivedTimeframe: message.timeframe
+                    });
+                    return; // НЕ ОБРАБАТЫВАЕМ тик от другого таймфрейма
+                }
+                
                 // Плавное обновление текущей свечи (не проверяем дубликаты для тиков)
                 // ИСПРАВЛЕНИЕ: Останавливаем начальную анимацию при получении первого реального тика
                 if (this.initialAnimationTimer) {
@@ -678,8 +701,8 @@ class ChartManager {
                     window.errorLogger?.debug('animation', 'Initial animation stopped - real tick received');
                 }
                 this.updateCandle(message.data, false);
-            } else if (message.type === 'newCandle') {
-                // 🛡️ ЗАЩИТА ОТ СМЕШИВАНИЯ АКТИВОВ: Проверяем что новая свеча от правильного символа
+                } else if (message.type === 'newCandle') {
+                // 🛡️ ЗАЩИТА ОТ СМЕШИВАНИЯ: Проверяем что новая свеча от правильного symbol:timeframe
                 if (message.symbol && message.symbol !== this.symbol) {
                     window.errorLogger?.warn('websocket', '🚨 New candle from wrong symbol - REJECTED', {
                         expectedSymbol: this.symbol,
@@ -688,6 +711,15 @@ class ChartManager {
                     });
                     console.warn(`🚨 Rejected new candle from ${message.symbol}, expected ${this.symbol}`);
                     return; // НЕ ОБРАБАТЫВАЕМ свечу от другого символа
+                }
+                
+                // 🎯 MULTI-TIMEFRAME: Проверяем что свеча от правильного таймфрейма
+                if (message.timeframe && message.timeframe !== this.timeframe) {
+                    window.errorLogger?.warn('websocket', '🚨 New candle from wrong timeframe - REJECTED', {
+                        expectedTimeframe: this.timeframe,
+                        receivedTimeframe: message.timeframe
+                    });
+                    return; // НЕ ОБРАБАТЫВАЕМ свечу от другого таймфрейма
                 }
                 
                 // Создание новой свечи
@@ -2105,7 +2137,8 @@ class ChartManager {
         }
 
         // Переиспользуем соединение (если есть) или создаем новое
-        this.connectWebSocket(newSymbol);
+        // 🎯 MULTI-TIMEFRAME: Подключаемся с текущим таймфреймом
+        this.connectWebSocket(newSymbol, this.timeframe);
         
         // ИСПРАВЛЕНИЕ: Линия цены теперь создается сразу после loadHistoricalData
         // Не нужна дополнительная задержка - уже создано выше
@@ -2152,13 +2185,14 @@ class ChartManager {
         
         window.errorLogger?.info('chart', '✅ SYMBOL CHANGE COMPLETED', { 
             symbol: newSymbol,
+            timeframe: this.timeframe,
             candleCount: this.candleCount,
             lastCandle: this.lastCandle,
             isFirstTickAfterChange: this.isFirstTickAfterChange,
             debugMode: this.changeSymbolDebugMode,
             isInitializingSymbol: this.isInitializingSymbol
         });
-        console.log(`🔄 Chart switched to ${newSymbol} | ${this.candleCount} candles loaded`);
+        console.log(`🔄 Chart switched to ${newSymbol}:${this.timeframe} | ${this.candleCount} candles loaded`);
         // Сбрасываем счётчики для нового символа
         this.tickCounter = 0;
         this.newCandleCounter = 0;
@@ -2260,21 +2294,61 @@ class ChartManager {
     }
     
     // НОВОЕ: Установить таймфрейм
+    // 🔥 IQCENT STYLE: Полная переподписка WebSocket при смене таймфрейма
     setTimeframe(timeframe) {
+        const oldTimeframe = this.timeframe;
         this.timeframe = timeframe;
+        
+        window.errorLogger?.info('chart', '🔄 TIMEFRAME CHANGE STARTED', { 
+            from: oldTimeframe,
+            to: timeframe,
+            chartType: this.chartType,
+            symbol: this.symbol
+        });
         
         // 🎯 КРИТИЧНО: Сбрасываем состояние текущей свечи при смене таймфрейма
         this.currentCandleByTimeframe = null;
         
-        window.errorLogger?.info('chart', 'Timeframe changed - rebuilding chart', { 
-            timeframe,
-            chartType: this.chartType
-        });
-        
-        // 🔥 POCKETOPTION STYLE: Полная пересборка графика при смене таймфрейма
-        // Для candles/bars - пересобираем график с группировкой
-        // Для line - ничего не делаем (линия всегда в реальном времени)
+        // 🔥 IQCENT STYLE: Переподписываемся на новый таймфрейм (график мигнет)
+        // Это происходит быстро, поэтому не нужен loader
         if (this.chartType !== 'line') {
+            // 1. Очищаем график (мигание)
+            const activeSeries = this.getActiveSeries();
+            if (activeSeries) {
+                activeSeries.setData([]);
+            }
+            if (this.volumeSeries) {
+                this.volumeSeries.setData([]);
+            }
+            
+            // 2. Переподписываемся на WebSocket с новым таймфреймом
+            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                // Unsubscribe от старого таймфрейма
+                this.ws.send(JSON.stringify({
+                    type: 'unsubscribe',
+                    symbol: this.symbol,
+                    timeframe: oldTimeframe
+                }));
+                
+                window.errorLogger?.info('websocket', 'Unsubscribed from old timeframe', {
+                    symbol: this.symbol,
+                    oldTimeframe
+                });
+                
+                // Subscribe на новый таймфрейм
+                this.ws.send(JSON.stringify({
+                    type: 'subscribe',
+                    symbol: this.symbol,
+                    timeframe: timeframe
+                }));
+                
+                window.errorLogger?.info('websocket', 'Subscribed to new timeframe', {
+                    symbol: this.symbol,
+                    timeframe
+                });
+            }
+            
+            // 3. Пересобираем график с новым таймфреймом
             this.rebuildChartForTimeframe(timeframe);
         }
         
@@ -2292,7 +2366,11 @@ class ChartManager {
             }
         }
         
-        console.log(`✅ Timeframe changed to: ${timeframe} (chart rebuilt)`);
+        window.errorLogger?.info('chart', '✅ TIMEFRAME CHANGE COMPLETED', {
+            timeframe,
+            chartType: this.chartType
+        });
+        console.log(`✅ Timeframe changed to: ${timeframe} (WebSocket resubscribed, chart rebuilt)`);
     }
     
     // 🔥 POCKETOPTION STYLE: Пересборка графика при смене таймфрейма

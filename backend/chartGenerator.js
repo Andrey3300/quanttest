@@ -8,13 +8,15 @@ const logger = require('./errorLogger');
 const TIMEFRAMES = {
     'S5': { seconds: 5, name: '5 seconds' },
     'S10': { seconds: 10, name: '10 seconds' },
+    'S15': { seconds: 15, name: '15 seconds' },
     'S30': { seconds: 30, name: '30 seconds' },
     'M1': { seconds: 60, name: '1 minute' },
     'M2': { seconds: 120, name: '2 minutes' },
+    'M3': { seconds: 180, name: '3 minutes' },
     'M5': { seconds: 300, name: '5 minutes' },
     'M10': { seconds: 600, name: '10 minutes' },
-    'M30': { seconds: 1800, name: '30 minutes' },
-    'H1': { seconds: 3600, name: '1 hour' }
+    'M15': { seconds: 900, name: '15 minutes' },
+    'M30': { seconds: 1800, name: '30 minutes' }
 };
 
 // ===== SMART VALIDATION LIMITS =====
