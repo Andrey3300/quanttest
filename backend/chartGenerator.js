@@ -32,11 +32,30 @@ class ChartGenerator {
     }
 
     // Генерация случайного числа с нормальным распределением (Box-Muller)
+    // 🛡️ ЗАЩИТА: Ограничиваем на ±3σ (99.7% нормального распределения)
+    // Это предотвращает экстремальные выбросы которые создают огромные свечи
     randomNormal(mean = 0, stdDev = 1) {
         const u1 = Math.random();
         const u2 = Math.random();
         const z0 = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
-        return mean + z0 * stdDev;
+        const value = mean + z0 * stdDev;
+        
+        // Обрезаем на ±3 стандартных отклонения
+        const minValue = mean - 3 * stdDev;
+        const maxValue = mean + 3 * stdDev;
+        const clampedValue = Math.max(minValue, Math.min(maxValue, value));
+        
+        // Логируем только если произошла отсечка (редкий случай)
+        if (clampedValue !== value) {
+            logger.debug('random', '🛡️ Extreme value clamped in randomNormal', {
+                symbol: this.symbol,
+                original: value.toFixed(6),
+                clamped: clampedValue.toFixed(6),
+                sigma: ((value - mean) / stdDev).toFixed(2) + 'σ'
+            });
+        }
+        
+        return clampedValue;
     }
 
     // Генерация случайного целого числа в диапазоне [min, max]
@@ -212,13 +231,48 @@ class ChartGenerator {
         // 📏 УМЕНЬШЕННАЯ волатильность внутри свечи для коротких свечей как на бинарных опционах
         const intraVolatility = this.volatility * 0.12; // сильно уменьшена с 0.4 до 0.12 для компактных свечей
         
+        // 🛡️ УРОВЕНЬ 3A: ПРЕВЕНТИВНОЕ ограничение размера фитилей
+        // Максимальный размер фитиля не может превышать половину MAX_CANDLE_RANGE_PERCENT
+        const maxWickSize = (this.MAX_CANDLE_RANGE_PERCENT / 2);
+        
         // High должен быть выше open и close
         const maxPrice = Math.max(openPrice, close);
-        const high = maxPrice * (1 + Math.abs(this.randomNormal(0, intraVolatility)));
+        const highWickSize = Math.abs(this.randomNormal(0, intraVolatility));
+        const limitedHighWick = Math.min(highWickSize, maxWickSize);
+        const high = maxPrice * (1 + limitedHighWick);
         
         // Low должен быть ниже open и close
         const minPrice = Math.min(openPrice, close);
-        const low = minPrice * (1 - Math.abs(this.randomNormal(0, intraVolatility)));
+        const lowWickSize = Math.abs(this.randomNormal(0, intraVolatility));
+        const limitedLowWick = Math.min(lowWickSize, maxWickSize);
+        const low = minPrice * (1 - limitedLowWick);
+        
+        // 🛡️ УРОВЕНЬ 3B: Проверка итогового диапазона ПЕРЕД созданием свечи
+        const candleRange = high - low;
+        const rangePercent = candleRange / this.basePrice;
+        
+        // Если диапазон все еще превышает лимит (хотя это маловероятно) - корректируем
+        let finalHigh = high;
+        let finalLow = low;
+        
+        if (rangePercent > this.MAX_CANDLE_RANGE_PERCENT) {
+            logger.warn('candle', '🛡️ Pre-validation: candle range too large, correcting', {
+                symbol: this.symbol,
+                originalRange: (rangePercent * 100).toFixed(2) + '%',
+                maxAllowed: (this.MAX_CANDLE_RANGE_PERCENT * 100).toFixed(2) + '%'
+            });
+            
+            // Уменьшаем диапазон симметрично вокруг центра
+            const midPrice = (maxPrice + minPrice) / 2;
+            const maxAllowedRange = this.basePrice * this.MAX_CANDLE_RANGE_PERCENT;
+            
+            finalHigh = Math.min(high, midPrice + maxAllowedRange / 2);
+            finalLow = Math.max(low, midPrice - maxAllowedRange / 2);
+            
+            // Убедимся что high >= open, close и low <= open, close
+            finalHigh = Math.max(finalHigh, openPrice, close);
+            finalLow = Math.min(finalLow, openPrice, close);
+        }
         
         // Генерируем объем (случайный в диапазоне)
         const baseVolume = 10000;
@@ -231,36 +285,42 @@ class ChartGenerator {
         const candle = {
             time: Math.floor(timestamp / 1000), // время в секундах для lightweight-charts
             open: parseFloat(openPrice.toFixed(precision)),
-            high: parseFloat(high.toFixed(precision)),
-            low: parseFloat(low.toFixed(precision)),
+            high: parseFloat(finalHigh.toFixed(precision)),
+            low: parseFloat(finalLow.toFixed(precision)),
             close: parseFloat(close.toFixed(precision)),
             volume: Math.max(1000, volume)
         };
         
-        // 🛡️ ВАЛИДАЦИЯ: Проверяем свечу на аномалии
+        // 🛡️ УРОВЕНЬ 3C: ФИНАЛЬНАЯ ВАЛИДАЦИЯ с откатом к безопасным значениям
         const validation = this.validateCandleAnomaly(candle, 'generateCandle');
         if (!validation.valid) {
-            // Если свеча аномальная - ограничиваем её размер
-            logger.warn('validation', 'Limiting anomalous candle', {
+            logger.error('validation', '🚨 Post-validation FAILED: anomalous candle detected!', {
                 symbol: this.symbol,
                 reason: validation.reason,
-                originalCandle: { ...candle }
+                originalCandle: { ...candle },
+                rangePercent: validation.rangePercent ? (validation.rangePercent * 100).toFixed(2) + '%' : 'N/A'
             });
             
-            // Ограничиваем high и low в пределах допустимого диапазона
-            const maxAllowedRange = this.basePrice * this.MAX_CANDLE_RANGE_PERCENT;
-            const midPrice = (candle.open + candle.close) / 2;
+            // 🛡️ ОТКАТ: Создаем ПОЛНОСТЬЮ безопасную свечу
+            // Вместо попытки "починить" аномалию, возвращаем минимальную валидную свечу
+            const safeHigh = Math.max(candle.open, candle.close) * 1.0005; // +0.05% максимум
+            const safeLow = Math.min(candle.open, candle.close) * 0.9995;  // -0.05% минимум
             
-            candle.high = Math.min(candle.high, midPrice + maxAllowedRange / 2);
-            candle.low = Math.max(candle.low, midPrice - maxAllowedRange / 2);
+            candle.high = parseFloat(safeHigh.toFixed(precision));
+            candle.low = parseFloat(safeLow.toFixed(precision));
             
-            // Убедимся что high >= open, close и low <= open, close
-            candle.high = Math.max(candle.high, candle.open, candle.close);
-            candle.low = Math.min(candle.low, candle.open, candle.close);
+            // Финальная проверка OHLC логики
+            if (candle.high < candle.open || candle.high < candle.close) {
+                candle.high = Math.max(candle.open, candle.close);
+            }
+            if (candle.low > candle.open || candle.low > candle.close) {
+                candle.low = Math.min(candle.open, candle.close);
+            }
             
-            logger.info('validation', 'Candle limited successfully', {
+            logger.info('validation', '✅ Safe candle created after validation failure', {
                 symbol: this.symbol,
-                limitedCandle: candle
+                safeCandle: candle,
+                newRange: ((candle.high - candle.low) / this.basePrice * 100).toFixed(2) + '%'
             });
         }
         
@@ -358,28 +418,54 @@ class ChartGenerator {
         // Используем существующий метод generateCandle() вместо плоской свечи
         const candle = this.generateCandle(timestamp * 1000, openPrice);
         
-        // 🛡️ ВАЛИДАЦИЯ: Проверяем скачок цены между свечами
+        // 🛡️ УРОВЕНЬ 4: ПРОВЕРКА ПРЫЖКОВ ЦЕНЫ между свечами
         if (this.candles.length > 0) {
             const previousCandle = this.candles[this.candles.length - 1];
             const jumpValidation = this.validatePriceJump(previousCandle, candle);
             
             if (!jumpValidation.valid) {
-                // Корректируем open новой свечи чтобы убрать скачок
-                logger.warn('validation', 'Correcting price jump', {
+                logger.error('validation', '🚨 Price jump detected between candles!', {
                     symbol: this.symbol,
                     originalOpen: candle.open,
-                    previousClose: previousCandle.close
+                    previousClose: previousCandle.close,
+                    jumpPercent: (jumpValidation.jumpPercent * 100).toFixed(2) + '%',
+                    maxAllowed: (jumpValidation.maxAllowed * 100).toFixed(2) + '%'
                 });
                 
-                candle.open = previousCandle.close;
+                // 🛡️ АГРЕССИВНАЯ КОРРЕКЦИЯ: Новая свеча ДОЛЖНА начинаться с close предыдущей
+                const correctedOpen = previousCandle.close;
+                const priceDiff = candle.close - candle.open; // сохраняем движение свечи
                 
-                // Пересчитываем high и low с учетом нового open
+                candle.open = correctedOpen;
+                candle.close = correctedOpen + priceDiff; // применяем то же движение к новому open
+                
+                // Пересчитываем high и low с учетом нового диапазона
+                // Сохраняем относительные размеры фитилей
+                const oldBodySize = Math.abs(candle.close - correctedOpen);
+                const maxSafeWick = this.basePrice * (this.MAX_CANDLE_RANGE_PERCENT / 3); // фитиль не более трети от лимита
+                
+                candle.high = Math.max(candle.open, candle.close) + Math.min(oldBodySize * 0.2, maxSafeWick);
+                candle.low = Math.min(candle.open, candle.close) - Math.min(oldBodySize * 0.2, maxSafeWick);
+                
+                // Округляем до нужной точности
+                candle.open = parseFloat(candle.open.toFixed(precision));
+                candle.high = parseFloat(candle.high.toFixed(precision));
+                candle.low = parseFloat(candle.low.toFixed(precision));
+                candle.close = parseFloat(candle.close.toFixed(precision));
+                
+                // Финальная OHLC проверка
                 candle.high = Math.max(candle.high, candle.open, candle.close);
                 candle.low = Math.min(candle.low, candle.open, candle.close);
                 
-                logger.info('validation', 'Price jump corrected', {
+                logger.info('validation', '✅ Price jump corrected with aggressive fix', {
                     symbol: this.symbol,
-                    correctedOpen: candle.open
+                    correctedCandle: {
+                        open: candle.open,
+                        high: candle.high,
+                        low: candle.low,
+                        close: candle.close
+                    },
+                    newRange: ((candle.high - candle.low) / this.basePrice * 100).toFixed(2) + '%'
                 });
             }
         }
@@ -555,9 +641,14 @@ class ChartGenerator {
         } else {
             // 📏 Редкие и короткие фитили для компактного вида как на бинарных опционах
             if (Math.random() < 0.015) { // уменьшено с 4% до 1.5%
-                const wickHigh = this.currentCandleState.close * (1 + Math.abs(this.randomNormal(0, microVolatility * 0.08))); // уменьшено с 0.2 до 0.08
+                // 🛡️ УРОВЕНЬ 2A: ПРЕВЕНТИВНОЕ ограничение размера фитиля ПЕРЕД созданием
+                const maxWickPercent = 0.003; // Максимум 0.3% от цены для одного фитиля
+                const randomWickSize = Math.abs(this.randomNormal(0, microVolatility * 0.08));
+                const limitedWickSize = Math.min(randomWickSize, maxWickPercent);
                 
-                // 🛡️ ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: Фитиль не должен быть больше MAX_CANDLE_RANGE_PERCENT
+                const wickHigh = this.currentCandleState.close * (1 + limitedWickSize);
+                
+                // 🛡️ УРОВЕНЬ 2B: Проверка итогового диапазона свечи
                 const potentialRange = wickHigh - this.currentCandleState.low;
                 const rangePercent = potentialRange / this.basePrice;
                 
@@ -566,6 +657,15 @@ class ChartGenerator {
                     rangePercent <= this.MAX_CANDLE_RANGE_PERCENT) {
                     this.currentCandleState.high = parseFloat(wickHigh.toFixed(precision));
                     this.currentCandleState.targetHigh = wickHigh;
+                } else if (rangePercent > this.MAX_CANDLE_RANGE_PERCENT) {
+                    // Логируем отклонение аномального фитиля
+                    logger.debug('wick', '🛡️ Wick rejected: would exceed range limit', {
+                        symbol: this.symbol,
+                        wickHigh: wickHigh.toFixed(6),
+                        currentLow: this.currentCandleState.low.toFixed(6),
+                        potentialRange: (rangePercent * 100).toFixed(2) + '%',
+                        maxAllowed: (this.MAX_CANDLE_RANGE_PERCENT * 100).toFixed(2) + '%'
+                    });
                 }
             }
         }
@@ -576,9 +676,14 @@ class ChartGenerator {
         } else {
             // 📏 Редкие и короткие фитили для компактного вида как на бинарных опционах
             if (Math.random() < 0.015) { // уменьшено с 4% до 1.5%
-                const wickLow = this.currentCandleState.close * (1 - Math.abs(this.randomNormal(0, microVolatility * 0.08))); // уменьшено с 0.2 до 0.08
+                // 🛡️ УРОВЕНЬ 2A: ПРЕВЕНТИВНОЕ ограничение размера фитиля ПЕРЕД созданием
+                const maxWickPercent = 0.003; // Максимум 0.3% от цены для одного фитиля
+                const randomWickSize = Math.abs(this.randomNormal(0, microVolatility * 0.08));
+                const limitedWickSize = Math.min(randomWickSize, maxWickPercent);
                 
-                // 🛡️ ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: Фитиль не должен быть больше MAX_CANDLE_RANGE_PERCENT
+                const wickLow = this.currentCandleState.close * (1 - limitedWickSize);
+                
+                // 🛡️ УРОВЕНЬ 2B: Проверка итогового диапазона свечи
                 const potentialRange = this.currentCandleState.high - wickLow;
                 const rangePercent = potentialRange / this.basePrice;
                 
@@ -587,6 +692,15 @@ class ChartGenerator {
                     rangePercent <= this.MAX_CANDLE_RANGE_PERCENT) {
                     this.currentCandleState.low = parseFloat(wickLow.toFixed(precision));
                     this.currentCandleState.targetLow = wickLow;
+                } else if (rangePercent > this.MAX_CANDLE_RANGE_PERCENT) {
+                    // Логируем отклонение аномального фитиля
+                    logger.debug('wick', '🛡️ Wick rejected: would exceed range limit', {
+                        symbol: this.symbol,
+                        wickLow: wickLow.toFixed(6),
+                        currentHigh: this.currentCandleState.high.toFixed(6),
+                        potentialRange: (rangePercent * 100).toFixed(2) + '%',
+                        maxAllowed: (this.MAX_CANDLE_RANGE_PERCENT * 100).toFixed(2) + '%'
+                    });
                 }
             }
         }
