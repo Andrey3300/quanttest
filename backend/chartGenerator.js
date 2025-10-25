@@ -82,20 +82,46 @@ class ChartGenerator {
         this.maxCandleChange = 0.015; // максимальное изменение за свечу (1.5%)
         this.candles = [];
         
+        // 🔕 SILENT MODE: Отключение логирования во время массовой генерации
+        this.silentMode = false;
+        
         // 🛡️ УМНАЯ ВАЛИДАЦИЯ: Лимиты зависят от типа актива
         const assetType = getAssetType(symbol);
-        const limits = ASSET_VALIDATION_LIMITS[assetType] || ASSET_VALIDATION_LIMITS.DEFAULT;
+        let limits = ASSET_VALIDATION_LIMITS[assetType] || ASSET_VALIDATION_LIMITS.DEFAULT;
+        
+        // 🚀 ДИНАМИЧЕСКИЕ ЛИМИТЫ: Для больших чисел (>10k) увеличиваем лимиты
+        if (basePrice > 10000) {
+            const scaleFactor = Math.min(Math.log10(basePrice / 1000), 3); // до 3x
+            limits = {
+                maxCandleRangePercent: limits.maxCandleRangePercent * (1 + scaleFactor * 0.5),
+                maxPriceJumpPercent: limits.maxPriceJumpPercent * (1 + scaleFactor * 0.5)
+            };
+        }
+        
         this.MAX_CANDLE_RANGE_PERCENT = limits.maxCandleRangePercent;
         this.MAX_PRICE_JUMP_PERCENT = limits.maxPriceJumpPercent;
         this.assetType = assetType; // Сохраняем для логирования
         
-        logger.debug('generator', 'Smart validation limits applied', {
-            symbol,
-            timeframe,
-            assetType,
-            maxCandleRange: (this.MAX_CANDLE_RANGE_PERCENT * 100).toFixed(1) + '%',
-            maxPriceJump: (this.MAX_PRICE_JUMP_PERCENT * 100).toFixed(1) + '%'
-        });
+        // 📊 СТАТИСТИКА: Счетчики для батчевого логирования
+        this.validationStats = {
+            totalGenerated: 0,
+            rangeLimitHits: 0,
+            priceJumpHits: 0,
+            corrected: 0
+        };
+        
+        // Логируем только если не в тихом режиме
+        if (!this.silentMode) {
+            logger.debug('generator', 'Smart validation limits applied', {
+                symbol,
+                timeframe,
+                assetType,
+                basePrice,
+                maxCandleRange: (this.MAX_CANDLE_RANGE_PERCENT * 100).toFixed(1) + '%',
+                maxPriceJump: (this.MAX_PRICE_JUMP_PERCENT * 100).toFixed(1) + '%',
+                scaledForLargePrice: basePrice > 10000
+            });
+        }
         
         // 🌊 СИСТЕМА ВОЛНООБРАЗНОГО ДВИЖЕНИЯ
         this.currentDrift = 0.0; // текущий динамический тренд (изменяется со временем)
@@ -219,7 +245,9 @@ class ChartGenerator {
     // 🛡️ ВАЛИДАЦИЯ СВЕЧИ НА АНОМАЛИИ
     validateCandleAnomaly(candle, context = 'unknown') {
         if (!candle) {
-            logger.error('validation', 'Candle is null', { symbol: this.symbol, context });
+            if (!this.silentMode) {
+                logger.error('validation', 'Candle is null', { symbol: this.symbol, context });
+            }
             return { valid: false, reason: 'Null candle' };
         }
         
@@ -229,13 +257,18 @@ class ChartGenerator {
         
         // 🛡️ ИСПРАВЛЕНИЕ: >= вместо > чтобы избежать бесконечного цикла на граничных значениях
         if (rangePercent >= this.MAX_CANDLE_RANGE_PERCENT) {
-            // Логируем ТОЛЬКО в файл, без console.error (избегаем спама)
-            logger.warn('validation', 'Candle range at/exceeds limit', {
-                symbol: this.symbol,
-                context,
-                rangePercent: (rangePercent * 100).toFixed(2) + '%',
-                maxAllowed: (this.MAX_CANDLE_RANGE_PERCENT * 100).toFixed(2) + '%'
-            });
+            // 📊 Увеличиваем счетчик
+            this.validationStats.rangeLimitHits++;
+            
+            // 🔕 Логируем ТОЛЬКО если не в тихом режиме
+            if (!this.silentMode) {
+                logger.warn('validation', 'Candle range at/exceeds limit', {
+                    symbol: this.symbol,
+                    context,
+                    rangePercent: (rangePercent * 100).toFixed(2) + '%',
+                    maxAllowed: (this.MAX_CANDLE_RANGE_PERCENT * 100).toFixed(2) + '%'
+                });
+            }
             
             return { 
                 valid: false, 
@@ -251,11 +284,13 @@ class ChartGenerator {
             candle.high < candle.close ||
             candle.low > candle.open ||
             candle.low > candle.close) {
-            logger.error('validation', 'OHLC logic violation', {
-                symbol: this.symbol,
-                context,
-                candle
-            });
+            if (!this.silentMode) {
+                logger.error('validation', 'OHLC logic violation', {
+                    symbol: this.symbol,
+                    context,
+                    candle
+                });
+            }
             return { valid: false, reason: 'OHLC violation' };
         }
         
@@ -273,12 +308,17 @@ class ChartGenerator {
         
         // 🛡️ ИСПРАВЛЕНИЕ: >= вместо > для граничных случаев
         if (jumpPercent >= this.MAX_PRICE_JUMP_PERCENT) {
-            // Логируем кратко, без избыточных данных
-            logger.warn('validation', 'Price jump at/exceeds limit', {
-                symbol: this.symbol,
-                jumpPercent: (jumpPercent * 100).toFixed(2) + '%',
-                maxAllowed: (this.MAX_PRICE_JUMP_PERCENT * 100).toFixed(2) + '%'
-            });
+            // 📊 Увеличиваем счетчик
+            this.validationStats.priceJumpHits++;
+            
+            // 🔕 Логируем ТОЛЬКО если не в тихом режиме
+            if (!this.silentMode) {
+                logger.warn('validation', 'Price jump at/exceeds limit', {
+                    symbol: this.symbol,
+                    jumpPercent: (jumpPercent * 100).toFixed(2) + '%',
+                    maxAllowed: (this.MAX_PRICE_JUMP_PERCENT * 100).toFixed(2) + '%'
+                });
+            }
             
             return {
                 valid: false,
@@ -293,6 +333,9 @@ class ChartGenerator {
 
     // Генерация одной свечи с реалистичным OHLC
     generateCandle(timestamp, openPrice) {
+        // 📊 Подсчет статистики
+        this.validationStats.totalGenerated++;
+        
         const close = this.generateNextPrice(openPrice);
         
         // 📏 УМЕНЬШЕННАЯ волатильность внутри свечи для коротких свечей как на бинарных опционах
@@ -361,11 +404,16 @@ class ChartGenerator {
         // 🛡️ УРОВЕНЬ 3C: ФИНАЛЬНАЯ ВАЛИДАЦИЯ с откатом к безопасным значениям
         const validation = this.validateCandleAnomaly(candle, 'generateCandle');
         if (!validation.valid) {
-            // Логируем кратко на уровне debug (не error!)
-            logger.debug('validation', 'Post-validation: creating safe candle', {
-                symbol: this.symbol,
-                reason: validation.reason
-            });
+            // 📊 Подсчет коррекций
+            this.validationStats.corrected++;
+            
+            // Логируем кратко на уровне debug (не error!) и только если не в тихом режиме
+            if (!this.silentMode) {
+                logger.debug('validation', 'Post-validation: creating safe candle', {
+                    symbol: this.symbol,
+                    reason: validation.reason
+                });
+            }
             
             // 🛡️ ОТКАТ: Создаем ПОЛНОСТЬЮ безопасную свечу
             // Вместо попытки "починить" аномалию, возвращаем минимальную валидную свечу
@@ -391,9 +439,22 @@ class ChartGenerator {
 
     // 🚀 ОПТИМИЗАЦИЯ: Генерация исторических данных за 1 день (вместо 3) для быстрого старта
     generateHistoricalData(days = 1) {
+        // 🔕 ВКЛЮЧАЕМ ТИХИЙ РЕЖИМ для массовой генерации
+        this.silentMode = true;
+        this.validationStats = {
+            totalGenerated: 0,
+            rangeLimitHits: 0,
+            priceJumpHits: 0,
+            corrected: 0
+        };
+        
+        const genStartTime = Date.now();
+        
         // 🎯 MULTI-TIMEFRAME: Если это не базовый S5 генератор - агрегируем из S5
         if (!this.isBaseGenerator && this.aggregator) {
-            return this.generateHistoricalDataFromAggregation(days);
+            const result = this.generateHistoricalDataFromAggregation(days);
+            this.silentMode = false;
+            return result;
         }
         
         // Базовый S5 генератор - работает как раньше
@@ -437,14 +498,26 @@ class ChartGenerator {
             };
         }
         
-        logger.info('historical', 'Historical data generated (S5)', {
+        // 🔕 ВЫКЛЮЧАЕМ ТИХИЙ РЕЖИМ
+        this.silentMode = false;
+        
+        // 📊 БАТЧЕВОЕ ЛОГИРОВАНИЕ: Выводим краткую статистику
+        const elapsedMs = Date.now() - genStartTime;
+        const hasIssues = this.validationStats.rangeLimitHits > 0 || 
+                         this.validationStats.priceJumpHits > 0 || 
+                         this.validationStats.corrected > 0;
+        
+        logger.info('historical', `Historical data generated (${this.timeframe})`, {
             symbol: this.symbol,
             timeframe: this.timeframe,
             totalCandles: candles.length,
-            lastCandleTime: candles[candles.length - 1]?.time,
-            alignedCurrentTime: alignedCurrentTime,
-            intervalSeconds: intervalSeconds,
-            currentCandleStateInitialized: !!this.currentCandleState
+            elapsedMs: elapsedMs,
+            stats: hasIssues ? {
+                total: this.validationStats.totalGenerated,
+                rangeLimits: this.validationStats.rangeLimitHits,
+                priceJumps: this.validationStats.priceJumpHits,
+                corrected: this.validationStats.corrected
+            } : 'all valid'
         });
         
         return candles;
@@ -1033,14 +1106,14 @@ class ChartGenerator {
             this.trendStrength = data.trendStrength;
         }
         
-        logger.info('persistence', 'Trend state restored', {
+        logger.debug('persistence', 'Trend state restored', {
             symbol: this.symbol,
             currentDrift: this.currentDrift,
             trendChangeCounter: this.trendChangeCounter,
             trendChangePeriod: this.trendChangePeriod
         });
         
-        // Генерируем 3 дня истории
+        // Генерируем 1 день истории (в тихом режиме)
         this.generateHistoricalData();
         
         // Теперь объединяем с сохраненными свечами
@@ -1400,16 +1473,20 @@ function saveAllGenerators() {
 // Инициализация всех генераторов (вызывается при старте сервера)
 // 🎯 MULTI-TIMEFRAME: Создаем генераторы для всех таймфреймов
 function initializeAllGenerators() {
-    logger.info('initialization', '🚀 Initializing multi-timeframe generators (IQCent style)...');
+    console.log('🚀 Initializing multi-timeframe generators...');
+    console.log('⏳ This may take 10-30 seconds on first run...');
     
+    const startTime = Date.now();
     const symbols = Object.keys(SYMBOL_CONFIG);
     const timeframes = Object.keys(TIMEFRAMES);
+    const totalWork = symbols.length * timeframes.length;
     
     let initialized = 0;
     let restored = 0;
+    let progressMilestone = 0;
     
-    symbols.forEach(symbol => {
-        timeframes.forEach(timeframe => {
+    symbols.forEach((symbol, symIndex) => {
+        timeframes.forEach((timeframe, tfIndex) => {
             // Пытаемся загрузить сохраненные данные
             const savedData = loadGenerator(symbol, timeframe);
             
@@ -1423,22 +1500,31 @@ function initializeAllGenerators() {
             }
             
             initialized++;
+            
+            // 📊 ПРОГРЕСС-БАР: Показываем каждые 10%
+            const progress = Math.floor((initialized / totalWork) * 100);
+            if (progress >= progressMilestone + 10 && progress > progressMilestone) {
+                progressMilestone = progress;
+                const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+                console.log(`   ${progress}% complete (${initialized}/${totalWork}) - ${elapsed}s elapsed`);
+            }
         });
     });
     
-    logger.info('initialization', '✅ All multi-timeframe generators initialized', {
-        symbols: symbols.length,
-        timeframesPerSymbol: timeframes.length,
-        totalGenerators: symbols.length * timeframes.length,
-        initialized,
-        restored,
-        fresh: initialized - restored
-    });
+    const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
     
-    // Информационное сообщение для старта сервера
-    console.log(`✅ Initialized ${initialized} chart generators across ${timeframes.length} timeframes`);
-    console.log(`   📊 ${symbols.length} symbols × ${timeframes.length} timeframes = ${initialized} total generators`);
+    console.log(`✅ Initialization complete in ${totalTime}s`);
+    console.log(`   📊 ${symbols.length} symbols × ${timeframes.length} timeframes = ${initialized} generators`);
     console.log(`   💾 Restored: ${restored}, Fresh: ${initialized - restored}`);
+    
+    logger.info('initialization', 'All generators initialized', {
+        totalGenerators: initialized,
+        restored,
+        fresh: initialized - restored,
+        totalTimeSeconds: parseFloat(totalTime),
+        symbols: symbols.length,
+        timeframes: timeframes.length
+    });
     
     return { initialized, restored, symbols: symbols.length, timeframes: timeframes.length };
 }

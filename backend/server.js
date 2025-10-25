@@ -363,9 +363,30 @@ if (fs.existsSync(logDir)) {
 
 // Инициализируем ВСЕ генераторы при старте сервера
 console.log('🚀 Initializing chart generators for 24/7 operation...');
-console.log('   (optimized: 1 day history instead of 3 for faster startup)');
-initializeAllGenerators();
-console.log('✅ All chart generators are running!');
+console.log('   (optimized: 1 day history with smart validation & silent mode)');
+
+// 🛡️ ЗАЩИТА: Timeout для инициализации (максимум 2 минуты)
+const initTimeout = setTimeout(() => {
+    console.error('❌ CRITICAL: Generator initialization timeout (>2min)');
+    console.error('   This should never happen. Check logs/chart-debug.log for details.');
+    console.error('   Terminating process...');
+    process.exit(1);
+}, 120000); // 2 минуты
+
+try {
+    initializeAllGenerators();
+    clearTimeout(initTimeout); // Успешно завершили - отменяем timeout
+    console.log('✅ All chart generators are running!');
+} catch (error) {
+    clearTimeout(initTimeout);
+    console.error('❌ CRITICAL: Generator initialization failed:', error);
+    logger.error('initialization', 'Fatal initialization error', {
+        error: error.message,
+        stack: error.stack
+    });
+    console.error('   Terminating process...');
+    process.exit(1);
+}
 
 // ===== WEBSOCKET SERVER =====
 
