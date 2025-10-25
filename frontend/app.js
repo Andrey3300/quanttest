@@ -133,17 +133,11 @@ function showTradingPage() {
     // 🎯 НОВОЕ: Инициализируем график при первом показе
     if (window.chartManager && !window.chartManager.isInitialized) {
         setTimeout(async () => {
-            // Инициализируем график
-            window.chartManager.init();
+            // Инициализируем график (теперь init() делает ВСЁ: создаёт график, загружает данные, подключает WebSocket)
+            await window.chartManager.init();
             
-            // Применяем сохраненные настройки
+            // Применяем сохраненные настройки типа графика
             window.chartManager.setChartType(chartType);
-            
-            // Загружаем исторические данные
-            await window.chartManager.loadHistoricalData('USD_MXN_OTC', chartTimeframe);
-            
-            // Подключаем WebSocket (тики для всех таймфреймов!)
-            window.chartManager.connectWebSocket('USD_MXN_OTC');
             
             // Запускаем таймер экспирации если нужно
             if (chartType !== 'line' && window.chartTimeframeManager) {
