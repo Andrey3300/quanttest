@@ -227,23 +227,15 @@ class ChartGenerator {
         const candleRange = candle.high - candle.low;
         const rangePercent = candleRange / this.basePrice;
         
-        if (rangePercent > this.MAX_CANDLE_RANGE_PERCENT) {
-            logger.error('validation', '🚨 BACKEND ANOMALY: Candle range too large!', {
+        // 🛡️ ИСПРАВЛЕНИЕ: >= вместо > чтобы избежать бесконечного цикла на граничных значениях
+        if (rangePercent >= this.MAX_CANDLE_RANGE_PERCENT) {
+            // Логируем ТОЛЬКО в файл, без console.error (избегаем спама)
+            logger.warn('validation', 'Candle range at/exceeds limit', {
                 symbol: this.symbol,
                 context,
-                candleRange: candleRange.toFixed(4),
                 rangePercent: (rangePercent * 100).toFixed(2) + '%',
-                maxAllowed: (this.MAX_CANDLE_RANGE_PERCENT * 100).toFixed(2) + '%',
-                basePrice: this.basePrice,
-                candle: {
-                    time: candle.time,
-                    open: candle.open,
-                    high: candle.high,
-                    low: candle.low,
-                    close: candle.close
-                }
+                maxAllowed: (this.MAX_CANDLE_RANGE_PERCENT * 100).toFixed(2) + '%'
             });
-            console.error(`🚨 ANOMALY: ${this.symbol} - range ${(rangePercent * 100).toFixed(2)}% exceeds limit`);
             
             return { 
                 valid: false, 
@@ -279,15 +271,13 @@ class ChartGenerator {
         const priceDiff = Math.abs(newCandle.open - previousCandle.close);
         const jumpPercent = priceDiff / this.basePrice;
         
-        if (jumpPercent > this.MAX_PRICE_JUMP_PERCENT) {
-            logger.error('validation', '🚨 BACKEND ANOMALY: Price jump too large!', {
+        // 🛡️ ИСПРАВЛЕНИЕ: >= вместо > для граничных случаев
+        if (jumpPercent >= this.MAX_PRICE_JUMP_PERCENT) {
+            // Логируем кратко, без избыточных данных
+            logger.warn('validation', 'Price jump at/exceeds limit', {
                 symbol: this.symbol,
-                previousClose: previousCandle.close,
-                newOpen: newCandle.open,
-                difference: priceDiff.toFixed(4),
                 jumpPercent: (jumpPercent * 100).toFixed(2) + '%',
-                maxAllowed: (this.MAX_PRICE_JUMP_PERCENT * 100).toFixed(2) + '%',
-                basePrice: this.basePrice
+                maxAllowed: (this.MAX_PRICE_JUMP_PERCENT * 100).toFixed(2) + '%'
             });
             
             return {
@@ -332,11 +322,11 @@ class ChartGenerator {
         let finalHigh = high;
         let finalLow = low;
         
-        if (rangePercent > this.MAX_CANDLE_RANGE_PERCENT) {
-            logger.warn('candle', '🛡️ Pre-validation: candle range too large, correcting', {
+        if (rangePercent >= this.MAX_CANDLE_RANGE_PERCENT) {
+            // Логируем только на уровне debug
+            logger.debug('candle', 'Pre-validation: correcting range', {
                 symbol: this.symbol,
-                originalRange: (rangePercent * 100).toFixed(2) + '%',
-                maxAllowed: (this.MAX_CANDLE_RANGE_PERCENT * 100).toFixed(2) + '%'
+                originalRange: (rangePercent * 100).toFixed(2) + '%'
             });
             
             // Уменьшаем диапазон симметрично вокруг центра
@@ -371,11 +361,10 @@ class ChartGenerator {
         // 🛡️ УРОВЕНЬ 3C: ФИНАЛЬНАЯ ВАЛИДАЦИЯ с откатом к безопасным значениям
         const validation = this.validateCandleAnomaly(candle, 'generateCandle');
         if (!validation.valid) {
-            logger.error('validation', '🚨 Post-validation FAILED: anomalous candle detected!', {
+            // Логируем кратко на уровне debug (не error!)
+            logger.debug('validation', 'Post-validation: creating safe candle', {
                 symbol: this.symbol,
-                reason: validation.reason,
-                originalCandle: { ...candle },
-                rangePercent: validation.rangePercent ? (validation.rangePercent * 100).toFixed(2) + '%' : 'N/A'
+                reason: validation.reason
             });
             
             // 🛡️ ОТКАТ: Создаем ПОЛНОСТЬЮ безопасную свечу
@@ -394,18 +383,14 @@ class ChartGenerator {
                 candle.low = Math.min(candle.open, candle.close);
             }
             
-            logger.info('validation', '✅ Safe candle created after validation failure', {
-                symbol: this.symbol,
-                safeCandle: candle,
-                newRange: ((candle.high - candle.low) / this.basePrice * 100).toFixed(2) + '%'
-            });
+            // Безопасная свеча создана, логировать не нужно (избегаем спама)
         }
         
         return candle;
     }
 
-    // Генерация исторических данных за 3 дня с шагом 5 секунд
-    generateHistoricalData(days = 3) {
+    // 🚀 ОПТИМИЗАЦИЯ: Генерация исторических данных за 1 день (вместо 3) для быстрого старта
+    generateHistoricalData(days = 1) {
         // 🎯 MULTI-TIMEFRAME: Если это не базовый S5 генератор - агрегируем из S5
         if (!this.isBaseGenerator && this.aggregator) {
             return this.generateHistoricalDataFromAggregation(days);
@@ -581,12 +566,10 @@ class ChartGenerator {
             const jumpValidation = this.validatePriceJump(previousCandle, candle);
             
             if (!jumpValidation.valid) {
-                logger.error('validation', '🚨 Price jump detected between candles!', {
+                // Логируем на уровне debug, не error
+                logger.debug('validation', 'Correcting price jump', {
                     symbol: this.symbol,
-                    originalOpen: candle.open,
-                    previousClose: previousCandle.close,
-                    jumpPercent: (jumpValidation.jumpPercent * 100).toFixed(2) + '%',
-                    maxAllowed: (jumpValidation.maxAllowed * 100).toFixed(2) + '%'
+                    jumpPercent: (jumpValidation.jumpPercent * 100).toFixed(2) + '%'
                 });
                 
                 // 🛡️ АГРЕССИВНАЯ КОРРЕКЦИЯ: Новая свеча ДОЛЖНА начинаться с close предыдущей
@@ -614,16 +597,7 @@ class ChartGenerator {
                 candle.high = Math.max(candle.high, candle.open, candle.close);
                 candle.low = Math.min(candle.low, candle.open, candle.close);
                 
-                logger.info('validation', '✅ Price jump corrected with aggressive fix', {
-                    symbol: this.symbol,
-                    correctedCandle: {
-                        open: candle.open,
-                        high: candle.high,
-                        low: candle.low,
-                        close: candle.close
-                    },
-                    newRange: ((candle.high - candle.low) / this.basePrice * 100).toFixed(2) + '%'
-                });
+                // Коррекция выполнена, не логируем (избегаем спама)
             }
         }
         

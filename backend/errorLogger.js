@@ -9,7 +9,8 @@ class ErrorLogger {
         this.logDir = logDir;
         this.logFile = path.join(logDir, 'chart-debug.log');
         this.errorFile = path.join(logDir, 'chart-errors.log');
-        this.maxFileSize = 10 * 1024 * 1024; // 10 MB
+        this.maxFileSize = 1 * 1024 * 1024; // 🚀 ОПТИМИЗАЦИЯ: 1 MB (вместо 10 MB) для частой ротации
+        this.maxLogFiles = 5; // 🚀 НОВОЕ: Храним максимум 5 ротированных файлов
         
         // 🎯 УРОВНИ ЛОГИРОВАНИЯ (от меньшего к большему)
         // debug = 0, info = 1, warn = 2, error = 3
@@ -49,7 +50,7 @@ class ErrorLogger {
         }
     }
 
-    // Проверка и ротация файлов логов
+    // 🚀 УЛУЧШЕННАЯ ротация с автоудалением старых файлов
     checkRotation(filepath) {
         try {
             if (fs.existsSync(filepath)) {
@@ -59,11 +60,43 @@ class ErrorLogger {
                     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
                     const backupPath = filepath.replace(/\.log$/, `-${timestamp}.log`);
                     fs.renameSync(filepath, backupPath);
-                    console.log(`[Logger] Rotated log file: ${backupPath}`);
+                    
+                    // Удаляем старые ротированные файлы (оставляем только последние N)
+                    this.cleanupRotatedFiles(filepath);
                 }
             }
         } catch (error) {
             console.error('[Logger] Error during log rotation:', error);
+        }
+    }
+    
+    // 🚀 НОВОЕ: Удаление старых ротированных файлов
+    cleanupRotatedFiles(baseFilepath) {
+        try {
+            const dir = path.dirname(baseFilepath);
+            const baseName = path.basename(baseFilepath, '.log');
+            const files = fs.readdirSync(dir);
+            
+            // Находим все ротированные файлы для этого базового файла
+            const rotatedFiles = files
+                .filter(f => f.startsWith(baseName) && f.endsWith('.log') && f !== path.basename(baseFilepath))
+                .map(f => ({
+                    name: f,
+                    path: path.join(dir, f),
+                    mtime: fs.statSync(path.join(dir, f)).mtimeMs
+                }))
+                .sort((a, b) => b.mtime - a.mtime); // Сортируем по времени (новые первыми)
+            
+            // Удаляем файлы старше N штук
+            if (rotatedFiles.length > this.maxLogFiles) {
+                const filesToDelete = rotatedFiles.slice(this.maxLogFiles);
+                filesToDelete.forEach(file => {
+                    fs.unlinkSync(file.path);
+                    console.log(`[Logger] Deleted old rotated log: ${file.name}`);
+                });
+            }
+        } catch (error) {
+            console.error('[Logger] Error cleaning rotated files:', error);
         }
     }
 
@@ -181,22 +214,39 @@ class ErrorLogger {
         return { isValid, checks };
     }
 
-    // Очистка старых логов (старше N дней)
-    cleanOldLogs(days = 7) {
+    // 🚀 АГРЕССИВНАЯ очистка старых логов (по умолчанию 1 час!)
+    cleanOldLogs(hours = 1) {
         try {
+            if (!fs.existsSync(this.logDir)) {
+                return;
+            }
+            
             const files = fs.readdirSync(this.logDir);
             const now = Date.now();
-            const maxAge = days * 24 * 60 * 60 * 1000;
+            const maxAge = hours * 60 * 60 * 1000; // В миллисекундах
+            
+            let deletedCount = 0;
+            let deletedSize = 0;
 
             files.forEach(file => {
                 const filepath = path.join(this.logDir, file);
-                const stats = fs.statSync(filepath);
-                
-                if (now - stats.mtimeMs > maxAge) {
-                    fs.unlinkSync(filepath);
-                    console.log(`[Logger] Deleted old log file: ${file}`);
+                try {
+                    const stats = fs.statSync(filepath);
+                    
+                    if (now - stats.mtimeMs > maxAge) {
+                        deletedSize += stats.size;
+                        fs.unlinkSync(filepath);
+                        deletedCount++;
+                    }
+                } catch (err) {
+                    // Файл мог быть удален другим процессом
                 }
             });
+            
+            if (deletedCount > 0) {
+                const sizeMB = (deletedSize / (1024 * 1024)).toFixed(2);
+                console.log(`[Logger] Cleaned ${deletedCount} old log files (${sizeMB} MB freed)`);
+            }
         } catch (error) {
             console.error('[Logger] Error cleaning old logs:', error);
         }
@@ -206,7 +256,12 @@ class ErrorLogger {
 // Экспортируем singleton
 const logger = new ErrorLogger();
 
-// Очищаем старые логи при запуске
-logger.cleanOldLogs(7);
+// 🚀 АГРЕССИВНАЯ очистка: удаляем логи старше 1 часа при запуске
+logger.cleanOldLogs(1);
+
+// 🚀 НОВОЕ: Периодическая очистка каждые 10 минут
+setInterval(() => {
+    logger.cleanOldLogs(1);
+}, 10 * 60 * 1000);
 
 module.exports = logger;
