@@ -754,26 +754,43 @@ class ChartManager {
         }
     }
 
-    // 🛡️ Валидация свечи на аномалии
+    // 🛡️ УРОВЕНЬ 5: Усиленная валидация свечи с защитой от всех типов аномалий
     validateCandle(candle, context = 'unknown') {
         if (!candle) {
             window.errorLogger?.error('validation', 'Candle is null or undefined', { context });
-            return { valid: false, reason: 'Null candle' };
+            return { valid: false, reason: 'Null candle', severity: 'critical' };
         }
+        
+        // 🛡️ Проверка на Infinity и экстремальные значения
+        const checkInfinity = (value, name) => {
+            if (!isFinite(value) || Math.abs(value) > 1e15) {
+                window.errorLogger?.error('validation', `🚨 ${name} is Infinity or extreme value`, { 
+                    value, name, candle, context 
+                });
+                return false;
+            }
+            return true;
+        };
         
         // Проверка базовых полей
-        if (typeof candle.time !== 'number' || isNaN(candle.time)) {
+        if (typeof candle.time !== 'number' || isNaN(candle.time) || !checkInfinity(candle.time, 'time')) {
             window.errorLogger?.error('validation', 'Invalid candle time', { candle, context });
-            return { valid: false, reason: 'Invalid time' };
+            return { valid: false, reason: 'Invalid time', severity: 'critical' };
         }
         
-        // Проверка OHLC значений
-        if (typeof candle.open !== 'number' || isNaN(candle.open) ||
-            typeof candle.high !== 'number' || isNaN(candle.high) ||
-            typeof candle.low !== 'number' || isNaN(candle.low) ||
-            typeof candle.close !== 'number' || isNaN(candle.close)) {
-            window.errorLogger?.error('validation', 'Invalid OHLC values', { candle, context });
-            return { valid: false, reason: 'Invalid OHLC' };
+        // 🛡️ Усиленная проверка OHLC значений на NaN и Infinity
+        if (typeof candle.open !== 'number' || isNaN(candle.open) || !checkInfinity(candle.open, 'open') ||
+            typeof candle.high !== 'number' || isNaN(candle.high) || !checkInfinity(candle.high, 'high') ||
+            typeof candle.low !== 'number' || isNaN(candle.low) || !checkInfinity(candle.low, 'low') ||
+            typeof candle.close !== 'number' || isNaN(candle.close) || !checkInfinity(candle.close, 'close')) {
+            window.errorLogger?.error('validation', '🚨 Invalid OHLC values (NaN or Infinity)', { candle, context });
+            return { valid: false, reason: 'Invalid OHLC (NaN/Infinity)', severity: 'critical' };
+        }
+        
+        // 🛡️ Проверка на отрицательные цены
+        if (candle.open <= 0 || candle.high <= 0 || candle.low <= 0 || candle.close <= 0) {
+            window.errorLogger?.error('validation', '🚨 Negative or zero prices detected', { candle, context });
+            return { valid: false, reason: 'Negative/zero prices', severity: 'critical' };
         }
         
         // Базовая OHLC логика
@@ -782,8 +799,8 @@ class ChartManager {
             candle.high < candle.close ||
             candle.low > candle.open ||
             candle.low > candle.close) {
-            window.errorLogger?.error('validation', 'OHLC logic violation', { candle, context });
-            return { valid: false, reason: 'OHLC logic violation' };
+            window.errorLogger?.error('validation', '🚨 OHLC logic violation', { candle, context });
+            return { valid: false, reason: 'OHLC logic violation', severity: 'high' };
         }
         
         // 🔥 ГЛАВНАЯ ПРОВЕРКА: Размах свечи
@@ -803,11 +820,12 @@ class ChartManager {
             const candleRange = candle.high - candle.low;
             const rangePercent = (candleRange / validationBasePrice);
             
+            // 🛡️ Проверка на аномальный диапазон
             if (rangePercent > this.MAX_CANDLE_RANGE_PERCENT) {
-                window.errorLogger?.error('validation', '🚨 ANOMALY DETECTED: Candle range too large!', {
+                window.errorLogger?.error('validation', '🚨 ANOMALY: Candle range exceeds limit!', {
                     candle,
                     context,
-                    candleRange,
+                    candleRange: candleRange.toFixed(6),
                     rangePercent: (rangePercent * 100).toFixed(2) + '%',
                     maxAllowed: (this.MAX_CANDLE_RANGE_PERCENT * 100).toFixed(2) + '%',
                     validationBasePrice,
@@ -821,8 +839,32 @@ class ChartManager {
                     valid: false, 
                     reason: 'Anomalous range',
                     rangePercent,
-                    maxAllowed: this.MAX_CANDLE_RANGE_PERCENT
+                    maxAllowed: this.MAX_CANDLE_RANGE_PERCENT,
+                    severity: 'critical',
+                    candle: candle
                 };
+            }
+            
+            // 🛡️ Дополнительная проверка на прыжки от последней свечи
+            if (this.lastCandle && context === 'tick') {
+                const priceDiff = Math.abs(candle.close - this.lastCandle.close);
+                const jumpPercent = priceDiff / validationBasePrice;
+                
+                if (jumpPercent > 0.01) { // Максимум 1% прыжок за тик
+                    window.errorLogger?.warn('validation', '⚠️ Large price jump in tick detected', {
+                        symbol: this.symbol,
+                        lastClose: this.lastCandle.close,
+                        newClose: candle.close,
+                        jumpPercent: (jumpPercent * 100).toFixed(2) + '%'
+                    });
+                    
+                    return {
+                        valid: false,
+                        reason: 'Large price jump',
+                        jumpPercent,
+                        severity: 'medium'
+                    };
+                }
             }
         } else {
             // Нет basePrice и нет lastHistoricalCandle - первичная инициализация
@@ -877,29 +919,72 @@ class ChartManager {
             });
         }
         
-        // 🛡️ ВАЛИДАЦИЯ: Проверяем свечу на аномалии
+        // 🛡️ УРОВЕНЬ 5: УСИЛЕННАЯ ВАЛИДАЦИЯ с обработкой разных уровней серьезности
         const validation = this.validateCandle(candle, isNewCandle ? 'newCandle' : 'tick');
         if (!validation.valid) {
-            window.errorLogger?.error('chart', '🚨 Candle validation failed - REJECTING', {
-                reason: validation.reason,
-                candle,
-                isNewCandle,
-                symbol: this.symbol
-            });
-            
-            // Если это аномалия из-за размаха - ОТКЛОНЯЕМ и запускаем очистку
-            if (validation.reason === 'Anomalous range') {
-                console.error(`🚨 ANOMALOUS CANDLE REJECTED: ${this.symbol}`, candle);
-                
-                // 🛡️ FALLBACK: Проверяем и очищаем график от аномалий
-                this.cleanAnomalousCandles();
-                
-                // Не обновляем график, оставляем последнее валидное состояние
-                return;
+            // Инициализируем счетчик аномалий если его нет
+            if (!this.anomalyCounter) {
+                this.anomalyCounter = 0;
+                this.lastCleanupTime = Date.now();
             }
             
-            // Для других ошибок тоже пропускаем
-            return;
+            this.anomalyCounter++;
+            
+            window.errorLogger?.error('chart', `🚨 [${validation.severity?.toUpperCase() || 'UNKNOWN'}] Validation failed!`, {
+                reason: validation.reason,
+                severity: validation.severity,
+                candle,
+                isNewCandle,
+                symbol: this.symbol,
+                anomalyCount: this.anomalyCounter
+            });
+            
+            // 🛡️ Обработка в зависимости от серьезности
+            if (validation.severity === 'critical') {
+                console.error(`🚨 CRITICAL ANOMALY REJECTED: ${this.symbol}`, validation.reason, candle);
+                
+                // КРИТИЧЕСКАЯ аномалия - полностью отклоняем и очищаем
+                this.cleanAnomalousCandles();
+                
+                // Не обновляем график
+                return;
+            } else if (validation.severity === 'high') {
+                console.warn(`⚠️ HIGH severity anomaly: ${this.symbol}`, validation.reason);
+                
+                // Пытаемся исправить свечу
+                const correctedCandle = this.correctAnomalousCandle(candle);
+                if (correctedCandle) {
+                    window.errorLogger?.info('chart', '✅ Candle corrected successfully', {
+                        original: candle,
+                        corrected: correctedCandle
+                    });
+                    candle = correctedCandle;
+                } else {
+                    // Не удалось исправить - отклоняем
+                    return;
+                }
+            } else if (validation.severity === 'medium') {
+                console.warn(`⚠️ Medium anomaly detected, attempting correction...`);
+                
+                // Для средних аномалий просто логируем и продолжаем
+                window.errorLogger?.warn('chart', 'Medium anomaly - allowing with warning', {
+                    candle,
+                    reason: validation.reason
+                });
+            }
+            
+            // 🛡️ АВТОМАТИЧЕСКАЯ ПРЕВЕНТИВНАЯ ОЧИСТКА: каждые 100 аномалий или каждые 5 минут
+            const timeSinceCleanup = Date.now() - (this.lastCleanupTime || 0);
+            if (this.anomalyCounter >= 100 || timeSinceCleanup > 300000) {
+                window.errorLogger?.warn('chart', '🧹 Triggering preventive cleanup', {
+                    anomalyCount: this.anomalyCounter,
+                    timeSinceCleanup: timeSinceCleanup
+                });
+                
+                this.cleanAnomalousCandles();
+                this.anomalyCounter = 0;
+                this.lastCleanupTime = Date.now();
+            }
         }
         
         // Для Line графика - просто обновляем цену без группировки
@@ -2045,6 +2130,66 @@ class ChartManager {
         }
     }
 
+    // 🛡️ Попытка исправить аномальную свечу
+    correctAnomalousCandle(candle) {
+        if (!candle || !this.basePrice) {
+            return null;
+        }
+        
+        try {
+            window.errorLogger?.debug('correction', 'Attempting to correct anomalous candle', {
+                symbol: this.symbol,
+                original: candle
+            });
+            
+            // Создаем корректированную копию
+            const corrected = { ...candle };
+            
+            // Ограничиваем high и low в разумных пределах
+            const maxAllowedRange = this.basePrice * (this.MAX_CANDLE_RANGE_PERCENT * 0.8); // 80% от максимума для безопасности
+            const midPrice = (corrected.open + corrected.close) / 2;
+            
+            // Корректируем high
+            if (corrected.high > midPrice + maxAllowedRange / 2) {
+                corrected.high = midPrice + maxAllowedRange / 2;
+            }
+            
+            // Корректируем low
+            if (corrected.low < midPrice - maxAllowedRange / 2) {
+                corrected.low = midPrice - maxAllowedRange / 2;
+            }
+            
+            // Финальная OHLC проверка
+            corrected.high = Math.max(corrected.high, corrected.open, corrected.close);
+            corrected.low = Math.min(corrected.low, corrected.open, corrected.close);
+            
+            // Проверяем что исправление сработало
+            const validation = this.validateCandle(corrected, 'correction');
+            if (validation.valid) {
+                window.errorLogger?.info('correction', '✅ Candle corrected successfully', {
+                    symbol: this.symbol,
+                    original: candle,
+                    corrected: corrected,
+                    newRange: ((corrected.high - corrected.low) / this.basePrice * 100).toFixed(2) + '%'
+                });
+                return corrected;
+            } else {
+                window.errorLogger?.warn('correction', 'Correction failed - candle still invalid', {
+                    symbol: this.symbol,
+                    validation
+                });
+                return null;
+            }
+        } catch (error) {
+            window.errorLogger?.error('correction', 'Error during candle correction', {
+                symbol: this.symbol,
+                error: error.message,
+                candle
+            });
+            return null;
+        }
+    }
+    
     // 🛡️ FALLBACK: Очистка аномальных свечей из графика
     cleanAnomalousCandles() {
         const activeSeries = this.getActiveSeries();
