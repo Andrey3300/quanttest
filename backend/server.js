@@ -425,7 +425,56 @@ wss.on('connection', (ws, req) => {
         
         logger.debug('websocket', `Client subscribed to ${subscriptionKey}`);
         
-        // Отправляем подтверждение
+        // 🎯 КРИТИЧНО: Получаем генератор и отправляем текущее состояние
+        const generator = getGenerator(symbol, timeframe);
+        
+        if (generator && generator.candles && generator.candles.length > 0) {
+          // Получаем текущую свечу таймфрейма
+          let currentCandle = null;
+          
+          // Для S5 - последняя завершенная свеча
+          if (timeframe === 'S5') {
+            currentCandle = generator.candles[generator.candles.length - 1];
+          } else {
+            // Для остальных таймфреймов - текущая агрегированная свеча
+            if (generator.aggregator && generator.aggregator.currentAggregatedCandle) {
+              currentCandle = generator.aggregator.currentAggregatedCandle;
+            } else if (generator.candles.length > 0) {
+              // Fallback к последней завершенной
+              currentCandle = generator.candles[generator.candles.length - 1];
+            }
+          }
+          
+          if (currentCandle) {
+            // Получаем длительность таймфрейма
+            const { TIMEFRAMES } = require('./chartGenerator');
+            const timeframeSeconds = TIMEFRAMES[timeframe]?.seconds || 5;
+            
+            // Отправляем текущее состояние клиенту
+            ws.send(JSON.stringify({
+              type: 'currentState',
+              symbol,
+              timeframe,
+              candle: currentCandle,
+              candleStartTime: currentCandle.time,
+              timeframeSeconds: timeframeSeconds,
+              serverTime: Math.floor(Date.now() / 1000)
+            }));
+            
+            logger.info('websocket', `✅ Sent current state for ${subscriptionKey}`, {
+              candleTime: currentCandle.time,
+              candleStartTime: currentCandle.time,
+              timeframeSeconds: timeframeSeconds,
+              price: currentCandle.close
+            });
+          } else {
+            logger.warn('websocket', `⚠️ No current candle available for ${subscriptionKey}`);
+          }
+        } else {
+          logger.warn('websocket', `⚠️ Generator not ready for ${subscriptionKey}`);
+        }
+        
+        // Отправляем подтверждение подписки
         ws.send(JSON.stringify({
           type: 'subscribed',
           symbol,
