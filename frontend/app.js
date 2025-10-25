@@ -130,28 +130,27 @@ function showTradingPage() {
     document.getElementById('auth-page').style.display = 'none';
     document.getElementById('trading-page').style.display = 'grid';
     
-    // Инициализируем график при первом показе
+    // 🎯 НОВОЕ: Инициализируем график при первом показе
     if (window.chartManager && !window.chartManager.isInitialized) {
-        // Увеличиваем задержку для правильной инициализации размеров
-        setTimeout(() => {
+        setTimeout(async () => {
+            // Инициализируем график
             window.chartManager.init();
             
-            // Применяем сохраненные настройки графика
+            // Применяем сохраненные настройки
             window.chartManager.setChartType(chartType);
-            if (chartType !== 'line') {
-                window.chartManager.setTimeframe(chartTimeframe);
-            }
             
-            window.chartManager.loadHistoricalData('USD_MXN_OTC').then(() => {
-                // Линия цены создается автоматически после загрузки исторических данных
-                // Запускаем таймер экспирации для candles/bars
-                if (chartType !== 'line' && window.chartTimeframeManager) {
-                    window.chartTimeframeManager.setTimeframe(chartTimeframe, (formatted, timeLeft, tf) => {
-                        window.chartManager.updateExpirationOverlay(tf, formatted, timeLeft);
-                    });
-                }
-            });
-            window.chartManager.connectWebSocket('USD_MXN_OTC', chartTimeframe);
+            // Загружаем исторические данные
+            await window.chartManager.loadHistoricalData('USD_MXN_OTC', chartTimeframe);
+            
+            // Подключаем WebSocket (тики для всех таймфреймов!)
+            window.chartManager.connectWebSocket('USD_MXN_OTC');
+            
+            // Запускаем таймер экспирации если нужно
+            if (chartType !== 'line' && window.chartTimeframeManager) {
+                window.chartTimeframeManager.setTimeframe(chartTimeframe, (formatted, timeLeft, tf) => {
+                    window.chartManager.updateExpirationOverlay(tf, formatted, timeLeft);
+                });
+            }
         }, 200);
     }
 }
