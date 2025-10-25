@@ -25,6 +25,7 @@ class ChartManager {
         this.connectionId = 0;
         this.isDestroyed = false;
         this.reconnectTimer = null;
+        this.isLoading = false; // 🔒 Флаг загрузки (игнорируем тики во время загрузки)
         
         // 🎯 ИНТЕРПОЛЯЦИЯ ДЛЯ ПЛАВНОСТИ (60fps smooth animation)
         this.interpolationEnabled = true; // Включена интерполяция
@@ -35,9 +36,6 @@ class ChartManager {
         this.baseInterpolationDuration = 300; // Базовая длительность
         this.animationFrameId = null; // ID для requestAnimationFrame
         this.lastTickTime = 0; // Время последнего тика
-        
-        // Оптимизация обновлений линии цены
-        this.lastPriceLineUpdate = 0;
     }
 
     // Инициализация графика
@@ -301,17 +299,16 @@ class ChartManager {
     // 🔒 ВАЖНО: Тики ТОЛЬКО обновляют существующую свечу, НЕ создают новые!
     // Новые свечи создаются ТОЛЬКО сервером через handleNewCandle()
     handleTick(data) {
+        // 🔒 КРИТИЧНО: Игнорируем тики во время загрузки нового таймфрейма/символа
+        if (this.isLoading) {
+            return;
+        }
+
         const { price, time } = data;
+        const now = Date.now();
 
         // Обновляем текущую цену
         this.currentPrice = price;
-
-        // Обновляем линию цены (раз в секунду, не каждый тик!)
-        const now = Date.now();
-        if (!this.lastPriceLineUpdate || now - this.lastPriceLineUpdate > 1000) {
-            this.updatePriceLine(price);
-            this.lastPriceLineUpdate = now;
-        }
 
         // 🔒 БЕЗОПАСНОСТЬ: Проверяем что есть последняя свеча для обновления
         const lastCandle = this.candles[this.candles.length - 1];
@@ -334,14 +331,21 @@ class ChartManager {
         this.candles[this.candles.length - 1] = updatedCandle;
         this.currentCandle = updatedCandle;
 
-        // 🎯 ПЛАВНАЯ ИНТЕРПОЛЯЦИЯ: запускаем анимацию к новому состоянию
+        // 🎯 ПЛАВНАЯ ИНТЕРПОЛЯЦИЯ: запускаем или обновляем анимацию
         if (this.interpolationEnabled && this.chartType !== 'line') {
-            const fromCandle = this.currentInterpolatedCandle || lastCandle;
-            this.startInterpolation(fromCandle, updatedCandle);
+            if (this.animationFrameId) {
+                // ✅ Анимация уже идет - просто обновляем целевое значение (НЕ прерываем!)
+                this.targetCandle = { ...updatedCandle };
+            } else {
+                // ✅ Анимации нет - запускаем новую
+                const fromCandle = this.currentInterpolatedCandle || lastCandle;
+                this.startInterpolation(fromCandle, updatedCandle);
+            }
             this.lastTickTime = now;
         } else {
-            // Без интерполяции - обновляем напрямую
+            // Без интерполяции - обновляем напрямую (+ линию цены)
             this.updateActiveSeries(updatedCandle, price);
+            this.updatePriceLine(price);
         }
     }
 
@@ -417,7 +421,7 @@ class ChartManager {
         }
     }
 
-    // Обновление линии текущей цены (оптимизировано!)
+    // Обновление линии текущей цены (60fps - синхронно с интерполяцией!)
     updatePriceLine(price) {
         if (!price || !this.candleSeries) return;
 
@@ -432,7 +436,7 @@ class ChartManager {
                 title: '',
             });
         } else {
-            // Обновляем существующую линию (быстро!)
+            // Обновляем существующую линию (60fps!)
             this.expirationPriceLine.applyOptions({ price: price });
         }
     }
@@ -443,11 +447,27 @@ class ChartManager {
 
         console.log(`⏱️ Changing timeframe to ${timeframe}`);
 
+        // 🔒 ШАГ 1: Останавливаем интерполяцию и блокируем тики
+        this.isLoading = true;
+        if (this.animationFrameId) {
+            cancelAnimationFrame(this.animationFrameId);
+            this.animationFrameId = null;
+        }
+
+        // 🔒 ШАГ 2: Сбрасываем состояние интерполяции
+        this.currentInterpolatedCandle = null;
+        this.targetCandle = null;
+        this.interpolationStartTime = null;
+
+        // 🔒 ШАГ 3: Обновляем таймфрейм
         this.timeframe = timeframe;
         localStorage.setItem('chartTimeframe', timeframe);
 
-        // Загружаем историю нового таймфрейма
+        // 🔒 ШАГ 4: Загружаем историю нового таймфрейма
         await this.loadHistoricalData(this.symbol, timeframe);
+
+        // 🔒 ШАГ 5: Разблокируем обработку тиков
+        this.isLoading = false;
 
         // WebSocket УЖЕ подключен (тики те же!)
         // Просто обновляем таймер экспирации
@@ -494,10 +514,26 @@ class ChartManager {
 
         console.log(`🔄 Changing symbol to ${newSymbol}`);
 
+        // 🔒 ШАГ 1: Останавливаем интерполяцию и блокируем тики
+        this.isLoading = true;
+        if (this.animationFrameId) {
+            cancelAnimationFrame(this.animationFrameId);
+            this.animationFrameId = null;
+        }
+
+        // 🔒 ШАГ 2: Сбрасываем состояние интерполяции
+        this.currentInterpolatedCandle = null;
+        this.targetCandle = null;
+        this.interpolationStartTime = null;
+
+        // 🔒 ШАГ 3: Обновляем символ
         this.symbol = newSymbol;
 
-        // Загружаем новую историю
+        // 🔒 ШАГ 4: Загружаем новую историю
         await this.loadHistoricalData(newSymbol, this.timeframe);
+
+        // 🔒 ШАГ 5: Разблокируем обработку тиков
+        this.isLoading = false;
 
         // Переподключаем WebSocket к новому символу
         this.connectWebSocket(newSymbol);
@@ -560,10 +596,10 @@ class ChartManager {
             return;
         }
         
-        // Останавливаем предыдущую анимацию если есть
+        // ✅ НЕ останавливаем предыдущую анимацию - пусть доедет плавно!
+        // Только запускаем если анимации еще нет
         if (this.animationFrameId) {
-            cancelAnimationFrame(this.animationFrameId);
-            this.animationFrameId = null;
+            return; // Анимация уже идет, просто обновим targetCandle в handleTick
         }
         
         // Рассчитываем длительность на основе таймфрейма
@@ -580,7 +616,9 @@ class ChartManager {
 
     // 🎨 ИНТЕРПОЛЯЦИЯ - анимационный цикл (60fps через requestAnimationFrame)
     animate() {
+        // 🔒 КРИТИЧНО: Проверка на null/undefined (защита от ошибок при смене таймфрейма)
         if (!this.interpolationEnabled || !this.targetCandle || !this.currentInterpolatedCandle) {
+            this.animationFrameId = null;
             return;
         }
         
@@ -609,10 +647,14 @@ class ChartManager {
                 activeSeries.update(interpolated);
             }
             
+            // ✅ КРИТИЧНО: Обновляем линию цены синхронно (60fps вместо 1fps!)
+            this.updatePriceLine(interpolated.close);
+            
             // Обновляем отображение цены
             this.updatePriceDisplay(interpolated.close);
         } catch (error) {
-            console.error('Animation error:', error);
+            console.error('❌ Animation error:', error);
+            this.animationFrameId = null;
             return;
         }
         
