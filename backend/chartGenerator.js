@@ -1183,8 +1183,35 @@ class TimeframeAggregator {
     }
     
     // Получить время начала периода для таймфрейма
+    // 🎯 ИСПРАВЛЕНИЕ: Выравнивание по реальному времени (как на биржах)
     getPeriodStartTime(timestamp) {
-        return Math.floor(timestamp / this.targetSeconds) * this.targetSeconds;
+        // Для секундных таймфреймов (S5, S10, S15, S30) - выравнивание по началу минуты
+        if (this.targetSeconds < 60) {
+            const date = new Date(timestamp * 1000);
+            const seconds = date.getUTCSeconds();
+            
+            // Находим ближайшее начало периода (округление вниз)
+            const periodSeconds = Math.floor(seconds / this.targetSeconds) * this.targetSeconds;
+            
+            // Устанавливаем время на начало периода (миллисекунды в 0)
+            date.setUTCSeconds(periodSeconds, 0);
+            
+            return Math.floor(date.getTime() / 1000);
+        }
+        
+        // Для минутных таймфреймов (M1, M2, M3, M5, M10, M15, M30) - выравнивание по началу часа
+        const date = new Date(timestamp * 1000);
+        const minutes = date.getUTCMinutes();
+        
+        const targetMinutes = this.targetSeconds / 60; // Длительность в минутах
+        
+        // Находим ближайшее начало периода (округление вниз)
+        const periodMinutes = Math.floor(minutes / targetMinutes) * targetMinutes;
+        
+        // Устанавливаем время на начало периода (секунды и миллисекунды в 0)
+        date.setUTCMinutes(periodMinutes, 0, 0);
+        
+        return Math.floor(date.getTime() / 1000);
     }
     
     // Агрегировать S5 свечу в текущий таймфрейм
