@@ -100,7 +100,7 @@ class CandleAggregator {
         this.timeframeSeconds = timeframeSeconds;
         this.candles = []; // История свечей
         this.currentCandle = null; // Текущая формирующаяся свеча
-        this.maxCandles = 1000; // Храним последние 1000 свечей
+        this.maxCandles = 20000; // 🎯 УВЕЛИЧЕНО: Храним последние 20000 свечей (было 1000)
     }
     
     /**
@@ -115,7 +115,7 @@ class CandleAggregator {
             if (this.currentCandle) {
                 this.candles.push({ ...this.currentCandle });
                 
-                // Ограничиваем размер массива
+                // 🎯 УВЕЛИЧЕНО: Ограничиваем размер массива до 20000 (было 1000)
                 if (this.candles.length > this.maxCandles) {
                     this.candles.shift();
                 }

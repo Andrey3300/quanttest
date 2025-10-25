@@ -25,6 +25,19 @@ class ChartManager {
         this.connectionId = 0;
         this.isDestroyed = false;
         this.reconnectTimer = null;
+        
+        // 🎯 ИНТЕРПОЛЯЦИЯ ДЛЯ ПЛАВНОСТИ (60fps smooth animation)
+        this.interpolationEnabled = true; // Включена интерполяция
+        this.targetCandle = null; // Целевое состояние свечи (куда движемся)
+        this.currentInterpolatedCandle = null; // Текущее интерполированное состояние
+        this.interpolationStartTime = null; // Время начала интерполяции
+        this.interpolationDuration = 300; // Длительность интерполяции (ms) - базовая для S5
+        this.baseInterpolationDuration = 300; // Базовая длительность
+        this.animationFrameId = null; // ID для requestAnimationFrame
+        this.lastTickTime = 0; // Время последнего тика
+        
+        // Оптимизация обновлений линии цены
+        this.lastPriceLineUpdate = 0;
     }
 
     // Инициализация графика
@@ -284,7 +297,7 @@ class ChartManager {
         }
     }
 
-    // 🎯 НОВОЕ: Обработка тика (обновление последней свечи)
+    // 🎯 НОВОЕ: Обработка тика (обновление последней свечи) С ИНТЕРПОЛЯЦИЕЙ
     handleTick(data) {
         const { price, time } = data;
 
@@ -321,16 +334,23 @@ class ChartManager {
 
             this.candles.push(newCandle);
             
-            // Ограничиваем размер массива
-            if (this.candles.length > 1000) {
+            // 🎯 УВЕЛИЧЕН ЛИМИТ: 20000 свечей (было 1000)
+            if (this.candles.length > 20000) {
                 this.candles.shift();
             }
 
-            // Обновляем график (только активную серию!)
+            // Обновляем график напрямую (новая свеча - без интерполяции)
             this.updateActiveSeries(newCandle, price);
             this.currentCandle = newCandle;
+            this.currentInterpolatedCandle = { ...newCandle };
+            
+            // Останавливаем интерполяцию если была
+            if (this.animationFrameId) {
+                cancelAnimationFrame(this.animationFrameId);
+                this.animationFrameId = null;
+            }
         } else {
-            // Свеча существует - обновляем её
+            // Свеча существует - обновляем её С ИНТЕРПОЛЯЦИЕЙ
             const updatedCandle = {
                 time: lastCandle.time,
                 open: lastCandle.open,
@@ -339,16 +359,23 @@ class ChartManager {
                 close: price
             };
 
-            // Обновляем график (только активную серию!)
-            this.updateActiveSeries(updatedCandle, price);
-
             // Сохраняем в массиве
             this.candles[this.candles.length - 1] = updatedCandle;
             this.currentCandle = updatedCandle;
+
+            // 🎯 ПЛАВНАЯ ИНТЕРПОЛЯЦИЯ: запускаем анимацию к новому состоянию
+            if (this.interpolationEnabled && this.chartType !== 'line') {
+                const fromCandle = this.currentInterpolatedCandle || lastCandle;
+                this.startInterpolation(fromCandle, updatedCandle);
+                this.lastTickTime = now;
+            } else {
+                // Без интерполяции - обновляем напрямую
+                this.updateActiveSeries(updatedCandle, price);
+            }
         }
     }
 
-    // 🎯 НОВОЕ: Обработка новой завершенной свечи
+    // 🎯 НОВОЕ: Обработка новой завершенной свечи С УЛУЧШЕННОЙ ВАЛИДАЦИЕЙ
     handleNewCandle(data) {
         const { candle, timeframe } = data;
 
@@ -357,25 +384,40 @@ class ChartManager {
             return;
         }
 
+        // 🛡️ ВАЛИДАЦИЯ ВРЕМЕНИ: Проверяем что время - число
+        if (typeof candle.time !== 'number' || isNaN(candle.time)) {
+            console.error('Invalid candle time format:', candle.time);
+            return;
+        }
+
         console.log(`🕯️ New ${timeframe} candle completed:`, candle);
 
         // Проверяем - возможно эта свеча уже есть в массиве (последняя)
         const lastCandle = this.candles[this.candles.length - 1];
         
+        // 🛡️ ЗАЩИТА ОТ ДУБЛИКАТОВ: Проверяем что новая свеча не старее последней
+        if (lastCandle && candle.time < lastCandle.time) {
+            console.warn('Ignoring outdated candle:', candle.time, 'last:', lastCandle.time);
+            return;
+        }
+        
         if (lastCandle && lastCandle.time === candle.time) {
             // Свеча уже есть (создана тиками) - просто обновляем финальные значения
             this.candles[this.candles.length - 1] = candle;
-            this.updateActiveSeries(candle, candle.close);
+            
+            // Обновляем напрямую (без интерполяции для завершенной свечи)
+            this.applyTickDirectly(candle, false);
         } else {
             // Свечи нет - добавляем
             this.candles.push(candle);
             
-            // Ограничиваем размер массива
-            if (this.candles.length > 1000) {
+            // 🎯 УВЕЛИЧЕН ЛИМИТ: 20000 свечей (было 1000)
+            if (this.candles.length > 20000) {
                 this.candles.shift();
             }
             
-            this.updateActiveSeries(candle, candle.close);
+            // Обновляем напрямую (без интерполяции для новой свечи)
+            this.applyTickDirectly(candle, true);
         }
 
         // 🎯 ВАЖНО: Создаем СЛЕДУЮЩУЮ текущую свечу
@@ -394,10 +436,19 @@ class ChartManager {
             };
             
             this.candles.push(nextCandle);
-            this.updateActiveSeries(nextCandle, candle.close);
             this.currentCandle = nextCandle;
+            this.currentInterpolatedCandle = { ...nextCandle };
+            
+            // Обновляем график напрямую
+            this.applyTickDirectly(nextCandle, true);
             
             console.log(`📊 Created next candle: ${new Date(nextCandleTime * 1000).toISOString()}`);
+        }
+        
+        // Останавливаем интерполяцию при создании новой свечи
+        if (this.animationFrameId) {
+            cancelAnimationFrame(this.animationFrameId);
+            this.animationFrameId = null;
         }
     }
 
@@ -521,6 +572,122 @@ class ChartManager {
         }
     }
 
+    // 🎨 ИНТЕРПОЛЯЦИЯ - рассчитать оптимальную длительность на основе таймфрейма
+    calculateInterpolationDuration() {
+        if (!window.chartTimeframeManager) {
+            return this.baseInterpolationDuration;
+        }
+        
+        const timeframeDuration = window.chartTimeframeManager.getTimeframeDuration(this.timeframe);
+        
+        // Для S5 (5 сек) используем базовую скорость 300ms
+        // Для более длинных таймфреймов увеличиваем пропорционально
+        const ratio = timeframeDuration / 5; // относительно S5
+        const scaledDuration = this.baseInterpolationDuration * Math.pow(ratio, 0.7);
+        
+        // Ограничиваем максимум до 3000ms
+        return Math.min(scaledDuration, 3000);
+    }
+
+    // 🎨 ИНТЕРПОЛЯЦИЯ - плавная анимация между тиками (60fps)
+    startInterpolation(fromCandle, toCandle) {
+        if (!this.interpolationEnabled || !fromCandle || !toCandle) {
+            return;
+        }
+        
+        // Останавливаем предыдущую анимацию если есть
+        if (this.animationFrameId) {
+            cancelAnimationFrame(this.animationFrameId);
+            this.animationFrameId = null;
+        }
+        
+        // Рассчитываем длительность на основе таймфрейма
+        this.interpolationDuration = this.calculateInterpolationDuration();
+        
+        // Инициализируем начальное состояние
+        this.currentInterpolatedCandle = { ...fromCandle };
+        this.targetCandle = { ...toCandle };
+        this.interpolationStartTime = performance.now();
+        
+        // Запускаем анимацию
+        this.animate();
+    }
+
+    // 🎨 ИНТЕРПОЛЯЦИЯ - анимационный цикл (60fps через requestAnimationFrame)
+    animate() {
+        if (!this.interpolationEnabled || !this.targetCandle || !this.currentInterpolatedCandle) {
+            return;
+        }
+        
+        const now = performance.now();
+        const elapsed = now - this.interpolationStartTime;
+        
+        // Рассчитываем прогресс (0.0 - 1.0)
+        const progress = Math.min(elapsed / this.interpolationDuration, 1.0);
+        
+        // Easing function для плавности (easeOutQuad - быстрый старт, плавное завершение)
+        const eased = 1 - Math.pow(1 - progress, 2);
+        
+        // Интерполируем OHLC значения
+        const interpolated = {
+            time: this.targetCandle.time,
+            open: this.currentInterpolatedCandle.open, // open не меняется
+            high: this.lerp(this.currentInterpolatedCandle.high, this.targetCandle.high, eased),
+            low: this.lerp(this.currentInterpolatedCandle.low, this.targetCandle.low, eased),
+            close: this.lerp(this.currentInterpolatedCandle.close, this.targetCandle.close, eased)
+        };
+        
+        // Обновляем график
+        try {
+            const activeSeries = this.getActiveSeries();
+            if (activeSeries && this.chartType !== 'line') {
+                activeSeries.update(interpolated);
+            }
+            
+            // Обновляем отображение цены
+            this.updatePriceDisplay(interpolated.close);
+        } catch (error) {
+            console.error('Animation error:', error);
+            return;
+        }
+        
+        // Продолжаем анимацию если не завершена
+        if (progress < 1.0) {
+            this.currentInterpolatedCandle = interpolated;
+            this.animationFrameId = requestAnimationFrame(() => this.animate());
+        } else {
+            // Анимация завершена - устанавливаем финальное состояние
+            this.currentInterpolatedCandle = this.targetCandle;
+            this.animationFrameId = null;
+        }
+    }
+
+    // 🎨 ИНТЕРПОЛЯЦИЯ - линейная интерполяция между двумя значениями
+    lerp(start, end, t) {
+        return start + (end - start) * t;
+    }
+
+    // 🚀 Прямое обновление свечи БЕЗ интерполяции (для особых случаев)
+    applyTickDirectly(candle, isNewCandle) {
+        const activeSeries = this.getActiveSeries();
+        if (!activeSeries) {
+            return;
+        }
+        
+        try {
+            // Обновляем график напрямую
+            activeSeries.update(candle);
+            
+            // Обновляем отображение цены
+            this.updatePriceDisplay(candle.close);
+            
+            // Обновляем интерполированное состояние (для плавного возобновления)
+            this.currentInterpolatedCandle = { ...candle };
+        } catch (error) {
+            console.error('Error applying tick directly:', error);
+        }
+    }
+
     // 🎯 Получить длительность таймфрейма в секундах
     getTimeframeSeconds(timeframe) {
         const timeframes = {
@@ -537,6 +704,43 @@ class ChartManager {
             'M30': 1800
         };
         return timeframes[timeframe] || 5;
+    }
+
+    // Обновление отображения цены
+    updatePriceDisplay(price) {
+        const priceEl = document.getElementById('current-price');
+        if (priceEl) {
+            priceEl.textContent = price.toFixed(4);
+            
+            // Добавляем анимацию изменения цены
+            priceEl.classList.remove('price-up', 'price-down');
+            
+            // Определяем направление изменения
+            const prevPrice = parseFloat(priceEl.dataset.prevPrice || price);
+            if (price > prevPrice) {
+                priceEl.classList.add('price-up');
+            } else if (price < prevPrice) {
+                priceEl.classList.add('price-down');
+            }
+            
+            priceEl.dataset.prevPrice = price;
+        }
+        
+        // Обновляем текущую цену для линии цены
+        this.currentPrice = price;
+    }
+
+    // НОВОЕ: Получить активную серию в зависимости от типа графика
+    getActiveSeries() {
+        switch (this.chartType) {
+            case 'line':
+                return this.lineSeries;
+            case 'bars':
+                return this.barSeries;
+            case 'candles':
+            default:
+                return this.candleSeries;
+        }
     }
 
     // Обработка ресайза
@@ -571,6 +775,13 @@ class ChartManager {
     // Уничтожение
     destroy() {
         this.isDestroyed = true;
+        
+        // 🎯 Останавливаем интерполяционную анимацию
+        if (this.animationFrameId) {
+            cancelAnimationFrame(this.animationFrameId);
+            this.animationFrameId = null;
+        }
+        
         this.disconnectWebSocket();
 
         if (window.chartTimeframeManager) {
