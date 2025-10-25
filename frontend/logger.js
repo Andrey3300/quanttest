@@ -4,7 +4,7 @@
 class ErrorLogger {
     constructor() {
         this.logs = [];
-        this.maxLogs = 1000; // максимальное количество логов
+        this.maxLogs = 500; // 🚀 ОПТИМИЗАЦИЯ: уменьшено с 1000 до 500
         this.storageKey = 'chart_debug_logs';
         this.enabled = true; // можно отключить через консоль
         

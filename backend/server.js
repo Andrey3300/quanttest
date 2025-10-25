@@ -344,8 +344,26 @@ app.get('/api/chart/current-state/:symbol', (req, res) => {
 
 // ===== ИНИЦИАЛИЗАЦИЯ ГЕНЕРАТОРОВ 24/7 =====
 
+// 🧹 ОЧИСТКА: Удаляем старые логи перед стартом
+console.log('🧹 Cleaning old logs before server start...');
+const logDir = path.join(__dirname, '..', 'logs');
+if (fs.existsSync(logDir)) {
+    const files = fs.readdirSync(logDir);
+    let cleaned = 0;
+    files.forEach(file => {
+        try {
+            fs.unlinkSync(path.join(logDir, file));
+            cleaned++;
+        } catch (err) {
+            // Игнорируем ошибки удаления
+        }
+    });
+    console.log(`✅ Cleaned ${cleaned} old log files`);
+}
+
 // Инициализируем ВСЕ генераторы при старте сервера
 console.log('🚀 Initializing chart generators for 24/7 operation...');
+console.log('   (optimized: 1 day history instead of 3 for faster startup)');
 initializeAllGenerators();
 console.log('✅ All chart generators are running!');
 
