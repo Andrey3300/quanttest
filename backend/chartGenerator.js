@@ -80,7 +80,7 @@ const SYMBOL_CONFIG = {
     'TRX_OTC': { basePrice: 0.165, volatility: 0.16, type: 'CRYPTO' },
     'TON_OTC': { basePrice: 5.25, volatility: 0.18, type: 'CRYPTO' },
     'BTC_ETF_OTC': { basePrice: 67500, volatility: 0.10, type: 'CRYPTO' },
-    'TEST_TEST1': { basePrice: 1.0, volatility: 0.06, type: 'CRYPTO' },
+    'TEST_TEST1': { basePrice: 1.0, volatility: 0.008, type: 'CRYPTO' },
     'BTC': { basePrice: 67500, volatility: 0.10, type: 'CRYPTO' },
     
     // Commodities - волатильность 0.06-0.16 (было 0.003-0.008)
@@ -304,11 +304,11 @@ class TickGenerator {
         let randomShock;
         if (isHistorical) {
             // Исторические данные: плавные свечи
-            const volatilityMultiplier = isTestSymbol ? 0.02 : 0.08;
+            const volatilityMultiplier = isTestSymbol ? 0.005 : 0.08;
             randomShock = this.gaussianRandom(seed) * this.volatility * volatilityMultiplier;
         } else {
             // Реал-тайм: быстрые тики
-            const volatilityMultiplier = isTestSymbol ? 0.01 : 0.02;
+            const volatilityMultiplier = isTestSymbol ? 0.003 : 0.02;
             randomShock = this.gaussianRandom() * this.volatility * volatilityMultiplier;
         }
         
@@ -316,14 +316,14 @@ class TickGenerator {
         let newPrice = currentPrice * (1 + returnForce + randomShock);
         
         // Ограничиваем максимальное изменение за тик
-        const maxChangeHistorical = isTestSymbol ? 0.002 : 0.01;
-        const maxChangeRealtime = isTestSymbol ? 0.001 : 0.005;
+        const maxChangeHistorical = isTestSymbol ? 0.0003 : 0.01;
+        const maxChangeRealtime = isTestSymbol ? 0.0002 : 0.005;
         const maxChange = currentPrice * (isHistorical ? maxChangeHistorical : maxChangeRealtime);
         newPrice = Math.max(currentPrice - maxChange, Math.min(currentPrice + maxChange, newPrice));
         
         // Ограничиваем общий диапазон
-        const rangeHistorical = isTestSymbol ? 0.05 : 0.15;
-        const rangeRealtime = isTestSymbol ? 0.03 : 0.10;
+        const rangeHistorical = isTestSymbol ? 0.005 : 0.15;
+        const rangeRealtime = isTestSymbol ? 0.003 : 0.10;
         const rangeMultiplier = isHistorical ? rangeHistorical : rangeRealtime;
         newPrice = Math.max(newPrice, this.basePrice * (1 - rangeMultiplier));
         newPrice = Math.min(newPrice, this.basePrice * (1 + rangeMultiplier));
