@@ -292,39 +292,69 @@ class TickGenerator {
     }
     
     /**
-     * Генерация исторических данных за 30 дней
+     * 🔥 НОВАЯ СИСТЕМА: Генерация исторических данных за 30 дней
+     * Генерируем свечи НАПРЯМУЮ для каждого таймфрейма с масштабированной волатильностью
      */
     async generateHistoricalData() {
         const now = Math.floor(Date.now() / 1000);
         const startTime = now - (30 * 24 * 60 * 60); // 30 дней назад
         
-        // Генерируем тики каждые 50ms за 30 дней
-        const tickInterval = 0.05; // 50ms в секундах
-        const totalTicks = Math.floor((30 * 24 * 60 * 60) / tickInterval);
+        console.log(`   Generating candles for each timeframe with scaled volatility...`);
         
-        let currentTime = startTime;
-        let price = this.basePrice;
-        
-        for (let i = 0; i < totalTicks; i++) {
-            // Генерируем изменение цены БЕЗ seed (плавные тренды)
-            price = this.generateNextPrice(price, true);
+        // Генерируем свечи для каждого таймфрейма отдельно
+        for (const [timeframe, config] of Object.entries(TIMEFRAMES)) {
+            const timeframeSeconds = config.seconds;
+            const timeframeMinutes = timeframeSeconds / 60;
             
-            // Создаем тик
-            const tick = {
-                time: Math.floor(currentTime),
-                price: price
-            };
+            // 🎯 МАСШТАБИРУЕМАЯ ВОЛАТИЛЬНОСТЬ: √(timeframeMinutes)
+            const scaledVolatility = this.volatility * Math.sqrt(timeframeMinutes);
             
-            // Добавляем во все агрегаторы
-            Object.values(this.aggregators).forEach(agg => {
-                agg.addTick(tick);
-            });
+            // Генерируем свечи для этого таймфрейма
+            let currentTime = startTime;
+            let price = this.basePrice;
             
-            currentTime += tickInterval;
+            // Количество свечей для 30 дней
+            const totalCandles = Math.floor((30 * 24 * 60 * 60) / timeframeSeconds);
+            
+            for (let i = 0; i < totalCandles; i++) {
+                const candleTime = Math.floor(currentTime / timeframeSeconds) * timeframeSeconds;
+                
+                // 🎯 SEEDED RANDOM: Используем timestamp + timeframe для воспроизводимости
+                const seed = candleTime + timeframe.charCodeAt(0);
+                
+                // Генерируем OHLC для свечи с учетом масштабированной волатильности
+                const candle = this.generateCandle(price, scaledVolatility, seed, timeframeMinutes);
+                candle.time = candleTime;
+                
+                // Добавляем свечу в агрегатор
+                this.aggregators[timeframe].candles.push(candle);
+                
+                // Ограничиваем размер
+                if (this.aggregators[timeframe].candles.length > this.aggregators[timeframe].maxCandles) {
+                    this.aggregators[timeframe].candles.shift();
+                }
+                
+                // Обновляем цену для следующей свечи (используем close)
+                price = candle.close;
+                currentTime += timeframeSeconds;
+            }
+            
+            // Создаем текущую формирующуюся свечу
+            const lastCandle = this.aggregators[timeframe].candles[this.aggregators[timeframe].candles.length - 1];
+            if (lastCandle) {
+                this.aggregators[timeframe].currentCandle = {
+                    time: lastCandle.time + timeframeSeconds,
+                    open: lastCandle.close,
+                    high: lastCandle.close,
+                    low: lastCandle.close,
+                    close: lastCandle.close
+                };
+            }
         }
         
-        // Устанавливаем текущую цену
-        this.currentPrice = price;
+        // Устанавливаем текущую цену (из последней свечи самого мелкого таймфрейма)
+        const s5LastCandle = this.aggregators['S5'].candles[this.aggregators['S5'].candles.length - 1];
+        this.currentPrice = s5LastCandle ? s5LastCandle.close : this.basePrice;
     }
     
     /**
@@ -349,6 +379,89 @@ class TickGenerator {
     }
     
     /**
+     * 🔥 НОВАЯ СИСТЕМА: Генерация одной свечи с SOFT BOUNDARIES и масштабированной волатильностью
+     */
+    generateCandle(basePrice, scaledVolatility, seed, timeframeMinutes) {
+        // Seeded random для воспроизводимости
+        const random = this.seededRandom(seed);
+        const random2 = this.seededRandom(seed + 1);
+        const random3 = this.seededRandom(seed + 2);
+        const random4 = this.seededRandom(seed + 3);
+        
+        // 🎯 SOFT BOUNDARIES: Mean reversion (возврат к базовой цене)
+        // Чем дальше цена от базовой, тем сильнее тянет обратно
+        const deviation = (basePrice - this.basePrice) / this.basePrice;
+        const meanReversionForce = -deviation * 0.3; // 30% возврат к среднему
+        
+        // 🌊 Трендовая составляющая (плавные волны)
+        const trendForce = Math.sin(seed / 5000) * 0.001; // Медленная синусоида
+        
+        // 🎲 Случайное изменение (Gaussian random)
+        const randomChange = this.gaussianFromSeed(random, random2) * scaledVolatility;
+        
+        // 📊 Итоговое изменение цены Open
+        const priceChange = meanReversionForce + trendForce + randomChange;
+        const open = basePrice * (1 + priceChange);
+        
+        // Генерируем High, Low, Close внутри свечи
+        const volatilityRange = scaledVolatility * 0.5; // Диапазон движения внутри свечи
+        
+        // High и Low относительно Open
+        const highChange = Math.abs(this.gaussianFromSeed(random3, random4)) * volatilityRange;
+        const lowChange = -Math.abs(this.gaussianFromSeed(random4, random3)) * volatilityRange;
+        
+        const high = open * (1 + highChange);
+        const low = open * (1 + lowChange);
+        
+        // Close где-то между High и Low (с небольшим смещением)
+        const closeRatio = random3 * 0.6 + 0.2; // 0.2 - 0.8
+        const close = low + (high - low) * closeRatio;
+        
+        // Применяем SOFT BOUNDARIES (мягкие ограничения)
+        const maxDeviation = 0.15; // Максимум ±15% от базовой цены
+        const minPrice = this.basePrice * (1 - maxDeviation);
+        const maxPrice = this.basePrice * (1 + maxDeviation);
+        
+        // Мягкое ограничение через tanh (плавное приближение к границам)
+        const softClamp = (value) => {
+            if (value < minPrice) {
+                const overshoot = (minPrice - value) / this.basePrice;
+                return minPrice - this.basePrice * 0.01 * Math.tanh(overshoot * 10);
+            }
+            if (value > maxPrice) {
+                const overshoot = (value - maxPrice) / this.basePrice;
+                return maxPrice + this.basePrice * 0.01 * Math.tanh(overshoot * 10);
+            }
+            return value;
+        };
+        
+        return {
+            open: softClamp(open),
+            high: softClamp(high),
+            low: softClamp(low),
+            close: softClamp(close)
+        };
+    }
+    
+    /**
+     * Seeded random: Генерация псевдослучайного числа на основе seed
+     */
+    seededRandom(seed) {
+        const x = Math.sin(seed) * 10000;
+        return x - Math.floor(x);
+    }
+    
+    /**
+     * Gaussian random из двух seeded random (Box-Muller transform)
+     */
+    gaussianFromSeed(u1, u2) {
+        if (u1 === 0) u1 = 0.0001;
+        if (u2 === 0) u2 = 0.0001;
+        return Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
+    }
+    
+    /**
+     * (Старый метод - оставлен для совместимости с тиками в реальном времени)
      * Генерация следующей цены с трендами (из work4 + улучшения)
      */
     generateNextPrice(currentPrice, isHistorical = false) {
@@ -418,7 +531,7 @@ class TickGenerator {
     }
     
     /**
-     * Получить свечи для таймфрейма
+     * 🚀 АВТОГЕНЕРАЦИЯ: Получить свечи для таймфрейма (с генерацией на лету при необходимости)
      */
     getCandles(timeframe, from = null, to = null, limit = null, before = null) {
         const aggregator = this.aggregators[timeframe];
@@ -427,6 +540,18 @@ class TickGenerator {
         }
         
         let candles = aggregator.getCandles();
+        
+        // 🚀 АВТОГЕНЕРАЦИЯ: Если запрашивают свечи РАНЬШЕ чем есть в истории - генерируем на лету
+        if (before !== null && candles.length > 0) {
+            const oldestCandle = candles[0];
+            
+            // Если запрашивают данные раньше чем самая старая свеча - нужно догенерировать
+            if (before < oldestCandle.time) {
+                console.log(`🔄 Auto-generating older candles for ${this.symbol} ${timeframe} (before ${new Date(before * 1000).toISOString()})...`);
+                this.generateOlderCandles(timeframe, before, limit || 100);
+                candles = aggregator.getCandles(); // Обновляем после генерации
+            }
+        }
         
         // 🎯 PAGINATION: Фильтрация по before (вернуть свечи ДО этого времени)
         if (before !== null) {
@@ -447,6 +572,55 @@ class TickGenerator {
         }
         
         return candles;
+    }
+    
+    /**
+     * 🚀 АВТОГЕНЕРАЦИЯ: Генерация дополнительных СТАРЫХ свечей (при скролле назад)
+     */
+    generateOlderCandles(timeframe, beforeTime, count = 100) {
+        const aggregator = this.aggregators[timeframe];
+        const config = TIMEFRAMES[timeframe];
+        const timeframeSeconds = config.seconds;
+        const timeframeMinutes = timeframeSeconds / 60;
+        
+        // 🎯 МАСШТАБИРУЕМАЯ ВОЛАТИЛЬНОСТЬ
+        const scaledVolatility = this.volatility * Math.sqrt(timeframeMinutes);
+        
+        // Определяем с какого времени генерировать
+        const oldestCandle = aggregator.candles[0];
+        let endTime = oldestCandle ? oldestCandle.time : beforeTime;
+        let startTime = endTime - (timeframeSeconds * count);
+        
+        // Генерируем свечи от старых к новым
+        let price = this.basePrice; // Начинаем с базовой цены
+        const newCandles = [];
+        
+        for (let currentTime = startTime; currentTime < endTime; currentTime += timeframeSeconds) {
+            const candleTime = Math.floor(currentTime / timeframeSeconds) * timeframeSeconds;
+            
+            // 🎯 SEEDED RANDOM для воспроизводимости
+            const seed = candleTime + timeframe.charCodeAt(0);
+            
+            // Генерируем свечу
+            const candle = this.generateCandle(price, scaledVolatility, seed, timeframeMinutes);
+            candle.time = candleTime;
+            
+            newCandles.push(candle);
+            
+            // Обновляем цену для следующей свечи
+            price = candle.close;
+        }
+        
+        // Добавляем новые свечи В НАЧАЛО массива
+        aggregator.candles = [...newCandles, ...aggregator.candles];
+        
+        // Ограничиваем общий размер (удаляем самые НОВЫЕ если превышен лимит)
+        if (aggregator.candles.length > aggregator.maxCandles) {
+            const excess = aggregator.candles.length - aggregator.maxCandles;
+            aggregator.candles = aggregator.candles.slice(0, -excess);
+        }
+        
+        console.log(`✅ Generated ${newCandles.length} older candles for ${this.symbol} ${timeframe}`);
     }
     
     /**
