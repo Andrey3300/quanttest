@@ -102,45 +102,6 @@ class CandleAggregator {
         this.candles = []; // История свечей
         this.currentCandle = null; // Текущая формирующаяся свеча
         this.maxCandles = 20000; // 🎯 УВЕЛИЧЕНО: Храним последние 20000 свечей (было 1000)
-        
-        // 🎨 PHASED CANDLE SYSTEM для длинных таймфреймов (M2, M5, M15, M30)
-        // Используется только для реалтайм свечей, формирующихся через тики
-        this.usePhasedSystem = ['M2', 'M5', 'M15', 'M30'].includes(timeframe);
-        this.candleStartTime = null; // Время начала текущей свечи
-    }
-    
-    /**
-     * 🎨 Получить фазовый мультипликатор волатильности для текущей свечи
-     * Имитирует поведение Pocket Option: birth -> growth -> stabilization -> finale
-     */
-    getPhasedVolatilityMultiplier(tickTime) {
-        if (!this.usePhasedSystem || !this.currentCandle) {
-            return 1.0; // Обычная волатильность для коротких таймфреймов
-        }
-        
-        const elapsed = tickTime - this.currentCandle.time;
-        const progress = elapsed / this.timeframeSeconds;
-        
-        // 🎨 ФАЗЫ (как в Pocket Option):
-        // 0-10%: Birth - крохотная свеча (15% волатильности)
-        // 10-80%: Growth - активный рост до полного размера (100% волатильности)
-        // 80-95%: Stabilization - "застыла", микродвижения (5% волатильности)
-        // 95-100%: Finale - неожиданный всплеск (45% волатильности)
-        
-        if (progress < 0.10) {
-            // 📍 BIRTH: Маленькая свеча 1-3мм (визуально)
-            return 0.15;
-        } else if (progress < 0.80) {
-            // 📈 GROWTH: Плавный рост от 15% до 100%
-            const growthProgress = (progress - 0.10) / 0.70;
-            return 0.15 + (0.85 * growthProgress);
-        } else if (progress < 0.95) {
-            // 😴 STABILIZATION: "Рынок медленный", только микродвижения
-            return 0.05;
-        } else {
-            // 💥 FINALE: Неожиданный всплеск (непредсказуемость)
-            return 0.45;
-        }
     }
     
     /**
@@ -169,7 +130,6 @@ class CandleAggregator {
                 low: tick.price,
                 close: tick.price
             };
-            this.candleStartTime = candleStartTime;
             
             return { isNewCandle: true, completedCandle: this.candles[this.candles.length - 1] };
         } else {
@@ -403,18 +363,7 @@ class TickGenerator {
      */
     generateTick() {
         const now = Math.floor(Date.now() / 1000);
-        
-        // 🎯 ИСПРАВЛЕНО: Генерируем цену с учетом фазовой системы для M2/M5/M15/M30
-        // Используем самый длинный активный таймфрейм для определения фазы
-        let longestTimeframe = null;
-        for (const tf of ['M30', 'M15', 'M5', 'M2']) {
-            if (this.aggregators[tf].currentCandle) {
-                longestTimeframe = tf;
-                break;
-            }
-        }
-        
-        this.currentPrice = this.generateNextPrice(this.currentPrice, false, longestTimeframe, now);
+        this.currentPrice = this.generateNextPrice(this.currentPrice);
         
         const tick = {
             time: now,
@@ -513,9 +462,8 @@ class TickGenerator {
         const high = bodyHigh * (1 + upperShadow);
         const low = bodyLow * (1 - lowerShadow);
         
-        // ✅ УБРАНЫ ЖЕСТКИЕ ЛИМИТЫ ±5%!
-        // Оставляем только защиту от экстремальных выбросов (±30%)
-        const maxDeviation = 0.30; // ±30% от базовой цены
+        // 🎯 МЯГКИЕ ГРАНИЦЫ: Только для экстремальных отклонений (±5%)
+        const maxDeviation = 0.05; // ±5% от базовой цены
         const minPrice = this.basePrice * (1 - maxDeviation);
         const maxPrice = this.basePrice * (1 + maxDeviation);
         
@@ -557,44 +505,14 @@ class TickGenerator {
     }
     
     /**
-     * 🎯 ИСПРАВЛЕНО: Получить волатильность для ТИКА с учетом накопления в таймфрейме
-     * tickVolatility должен быть согласован с timeframeVolatility через √(ticksInTimeframe)
-     */
-    getTickVolatility(timeframe) {
-        const config = TIMEFRAMES[timeframe];
-        if (!config) return this.volatility * 0.001; // fallback
-        
-        const timeframeSeconds = config.seconds;
-        const tickIntervalSeconds = 0.5; // 500ms
-        const ticksInTimeframe = timeframeSeconds / tickIntervalSeconds;
-        
-        // 🎯 КЛЮЧЕВАЯ ФОРМУЛА:
-        // timeframeVolatility = tickVolatility × √(ticksInTimeframe)
-        // Следовательно: tickVolatility = timeframeVolatility / √(ticksInTimeframe)
-        
-        const timeframeVolatility = this.getScaledVolatility(timeframeSeconds);
-        const tickVolatility = timeframeVolatility / Math.sqrt(ticksInTimeframe);
-        
-        return tickVolatility;
-    }
-    
-    /**
      * (Старый метод - оставлен для совместимости с тиками в реальном времени)
      * Генерация следующей цены с трендами (из work4 + улучшения)
      */
-    generateNextPrice(currentPrice, isHistorical = false, currentTimeframe = null, tickTime = null) {
-        // 🎯 ИСПРАВЛЕНО: Правильная волатильность тика
-        // Базовая волатильность для S5 (самый короткий таймфрейм)
-        const tickVolatility = this.getTickVolatility('S5');
-        
-        // 🎨 ФАЗОВАЯ СИСТЕМА: Если указан таймфрейм, применяем фазовый мультипликатор
-        let phasedMultiplier = 1.0;
-        if (currentTimeframe && tickTime) {
-            const aggregator = this.aggregators[currentTimeframe];
-            if (aggregator) {
-                phasedMultiplier = aggregator.getPhasedVolatilityMultiplier(tickTime);
-            }
-        }
+    generateNextPrice(currentPrice, isHistorical = false) {
+        // 🎯 ПРАВИЛЬНАЯ ФОРМУЛА: tickVolatility через новую функцию масштабирования
+        // tickInterval = 500ms = 0.5 сек
+        const tickIntervalSeconds = 0.5;
+        const tickVolatility = this.getScaledVolatility(tickIntervalSeconds);
         
         if (this.symbol === 'TEST_TEST1') {
             // 1. Плавный тренд (обновляем счётчик и направление)
@@ -606,27 +524,23 @@ class TickGenerator {
                 this.trendStrengthTest = tickVolatility * 0.3; // 30% от tick volatility
             }
             
-            // 🎨 ФАЗОВАЯ СИСТЕМА: Применяем мультипликатор к волатильности
-            const adjustedTickVolatility = tickVolatility * phasedMultiplier;
-            
             // 2. Волатильность (Gaussian random)
-            const randomChange = this.gaussianRandom() * adjustedTickVolatility;
+            const randomChange = this.gaussianRandom() * tickVolatility;
             
             // 3. Имитация рыночного пульса (микро-волны)
-            const pulse = Math.sin(Date.now() / 5000) * adjustedTickVolatility * 0.1; // 10% пульсация
+            const pulse = Math.sin(Date.now() / 5000) * tickVolatility * 0.1; // 10% пульсация
             
             // 4. Mean reversion (мягкий возврат к базовой цене)
             const deviation = (currentPrice - this.basePrice) / this.basePrice;
-            const meanReversionForce = -deviation * adjustedTickVolatility * 0.2; // 20% от tick volatility
+            const meanReversionForce = -deviation * tickVolatility * 0.2; // 20% от tick volatility
             
             // 5. Обновляем цену
             const priceChange = this.trendDir * this.trendStrengthTest + randomChange + pulse + meanReversionForce;
             let next = currentPrice + priceChange;
             
-            // ✅ УБРАНЫ ЖЕСТКИЕ ЛИМИТЫ! Теперь цена может идти выше 1.05 и ниже 0.95
-            // Только защита от экстремальных выбросов (±30% от базовой цены)
-            const minPrice = this.basePrice * 0.70;
-            const maxPrice = this.basePrice * 1.30;
+            // Мягкие ограничения (±5% от базовой цены)
+            const minPrice = this.basePrice * 0.95;
+            const maxPrice = this.basePrice * 1.05;
             next = Math.max(minPrice, Math.min(maxPrice, next));
             
             return parseFloat(next.toFixed(6));
@@ -635,16 +549,13 @@ class TickGenerator {
         // 🌊 ДЛЯ ОСТАЛЬНЫХ АКТИВОВ: Обновляем тренд для волнообразного движения
         this.updateTrend();
         
-        // 🎨 ФАЗОВАЯ СИСТЕМА: Применяем мультипликатор к волатильности
-        const adjustedVolatility = this.volatility * phasedMultiplier;
-        
         // Mean reversion: цена стремится вернуться к базовой (адаптивная сила)
         const deviation = Math.abs(currentPrice - this.basePrice) / this.basePrice;
         const adaptiveMeanReversion = this.meanReversionSpeed * Math.pow(deviation * 10, 1.5);
         const meanReversionForce = (this.basePrice - currentPrice) * adaptiveMeanReversion;
         
         // Geometric Brownian Motion с динамическим трендом
-        const randomShock = this.gaussianRandom() * adjustedVolatility;
+        const randomShock = this.gaussianRandom() * this.volatility;
         const priceChange = this.currentDrift + meanReversionForce + randomShock;
         
         // Ограничиваем максимальное изменение
@@ -653,9 +564,9 @@ class TickGenerator {
         
         let newPrice = currentPrice * (1 + limitedChange);
         
-        // ✅ УВЕЛИЧЕНЫ ГРАНИЦЫ: ±20% вместо ±10% (больше свободы движения)
-        newPrice = Math.max(newPrice, this.basePrice * 0.80);
-        newPrice = Math.min(newPrice, this.basePrice * 1.20);
+        // Убедимся что цена положительная и в разумных пределах
+        newPrice = Math.max(newPrice, this.basePrice * 0.9);
+        newPrice = Math.min(newPrice, this.basePrice * 1.1);
         
         // Округляем до разумного количества знаков
         const decimals = this.basePrice < 1 ? 6 : this.basePrice < 100 ? 4 : 2;
