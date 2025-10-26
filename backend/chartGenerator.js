@@ -371,7 +371,7 @@ class TickGenerator {
     /**
      * Получить свечи для таймфрейма
      */
-    getCandles(timeframe, from = null, to = null) {
+    getCandles(timeframe, from = null, to = null, limit = null, before = null) {
         const aggregator = this.aggregators[timeframe];
         if (!aggregator) {
             throw new Error(`Unknown timeframe: ${timeframe}`);
@@ -379,12 +379,22 @@ class TickGenerator {
         
         let candles = aggregator.getCandles();
         
-        // Фильтрация по времени
+        // 🎯 PAGINATION: Фильтрация по before (вернуть свечи ДО этого времени)
+        if (before !== null) {
+            candles = candles.filter(c => c.time < before);
+        }
+        
+        // Фильтрация по времени (для обратной совместимости)
         if (from !== null) {
             candles = candles.filter(c => c.time >= from);
         }
         if (to !== null) {
             candles = candles.filter(c => c.time <= to);
+        }
+        
+        // 🎯 PAGINATION: Ограничение количества свечей (берем последние limit свечей)
+        if (limit !== null && limit > 0) {
+            candles = candles.slice(-limit);
         }
         
         return candles;
