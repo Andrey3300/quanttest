@@ -80,7 +80,7 @@ const SYMBOL_CONFIG = {
     'TRX_OTC': { basePrice: 0.165, volatility: 0.16, type: 'CRYPTO' },
     'TON_OTC': { basePrice: 5.25, volatility: 0.18, type: 'CRYPTO' },
     'BTC_ETF_OTC': { basePrice: 67500, volatility: 0.10, type: 'CRYPTO' },
-    'TEST_TEST1': { basePrice: 1.0, volatility: 0.0002, type: 'FOREX' }, // 🎯 CALIBRATED: baseVolatility для M1, масштабируется автоматически
+    'TEST_TEST1': { basePrice: 1.0, volatility: 0.00152, type: 'FOREX' }, // 🎯 CALIBRATED: baseVolatility для M1 (из реальных данных IQCent)
     'BTC': { basePrice: 67500, volatility: 0.10, type: 'CRYPTO' },
     
     // Commodities - волатильность 0.06-0.16 (было 0.003-0.008)
@@ -306,8 +306,8 @@ class TickGenerator {
             const timeframeSeconds = config.seconds;
             const timeframeMinutes = timeframeSeconds / 60;
             
-            // 🎯 МАСШТАБИРУЕМАЯ ВОЛАТИЛЬНОСТЬ: √(timeframeMinutes)
-            const scaledVolatility = this.volatility * Math.sqrt(timeframeMinutes);
+            // 🎯 МАСШТАБИРУЕМАЯ ВОЛАТИЛЬНОСТЬ: С насыщением (на основе реальных данных IQCent)
+            const scaledVolatility = this.getScaledVolatility(timeframeSeconds);
             
             // Генерируем свечи для этого таймфрейма
             let currentTime = startTime;
@@ -379,6 +379,34 @@ class TickGenerator {
     }
     
     /**
+     * 🎯 МАСШТАБИРОВАНИЕ ВОЛАТИЛЬНОСТИ: На основе реальных данных IQCent
+     * Волатильность растёт медленнее чем √t для длинных таймфреймов (эффект насыщения)
+     */
+    getScaledVolatility(timeframeSeconds) {
+        // Базовая волатильность настроена для M1 (60 секунд)
+        const baseSeconds = 60;
+        
+        // Коэффициенты на основе реальных данных IQCent:
+        // S5 (5s): 0.25x, M1 (60s): 1.0x, M5 (300s): 2.17x, M15 (900s): 3.18x, M30 (1800s): 3.60x
+        // Формула: k = √(t/base) для коротких TF, с насыщением для длинных
+        
+        const ratio = timeframeSeconds / baseSeconds;
+        
+        if (ratio <= 1) {
+            // Короткие таймфреймы (S5-M1): линейное масштабирование
+            const scalingFactor = Math.sqrt(ratio);
+            return this.volatility * scalingFactor;
+        } else {
+            // Длинные таймфреймы (M2-M30): с насыщением (логарифмический рост)
+            // k = √ratio * (1 + ln(ratio)/5) - формула с затуханием
+            const sqrtRatio = Math.sqrt(ratio);
+            const saturation = 1 + Math.log(ratio) / 5;
+            const scalingFactor = sqrtRatio * saturation;
+            return this.volatility * scalingFactor;
+        }
+    }
+    
+    /**
      * 🔥 НОВАЯ СИСТЕМА: Генерация одной свечи с SOFT BOUNDARIES и масштабированной волатильностью
      */
     generateCandle(basePrice, scaledVolatility, seed, timeframeMinutes) {
@@ -396,19 +424,25 @@ class TickGenerator {
         // 🌊 Трендовая составляющая (плавные волны)
         const trendForce = Math.sin(seed / 5000) * 0.001; // Медленная синусоида
         
-        // 🎲 Случайное изменение (Gaussian random)
-        const randomChange = this.gaussianFromSeed(random, random2) * scaledVolatility;
+        // 🎲 Случайное изменение (Gaussian random с ограничением до ±2.5σ)
+        const randomGaussian = this.clampGaussian(this.gaussianFromSeed(random, random2), 2.5);
+        const randomChange = randomGaussian * scaledVolatility;
         
         // 📊 Итоговое изменение цены Open
         const priceChange = meanReversionForce + trendForce + randomChange;
         const open = basePrice * (1 + priceChange);
         
         // Генерируем High, Low, Close внутри свечи
-        const volatilityRange = scaledVolatility * 0.5; // Диапазон движения внутри свечи
+        // 🎯 РЕАЛИЗМ: Тело + тени (диапазон = 100%, тело = 40-70%, тени = остаток)
+        const totalRange = scaledVolatility * 1.2; // Полный диапазон свечи
+        const bodyRatio = 0.4 + random3 * 0.3; // Тело составляет 40-70% диапазона
         
-        // High и Low относительно Open
-        const highChange = Math.abs(this.gaussianFromSeed(random3, random4)) * volatilityRange;
-        const lowChange = -Math.abs(this.gaussianFromSeed(random4, random3)) * volatilityRange;
+        // High и Low относительно Open (с ограничением Gaussian)
+        const highGaussian = this.clampGaussian(Math.abs(this.gaussianFromSeed(random3, random4)), 2.0);
+        const lowGaussian = this.clampGaussian(Math.abs(this.gaussianFromSeed(random4, random3)), 2.0);
+        
+        const highChange = highGaussian * totalRange * 0.6;
+        const lowChange = -lowGaussian * totalRange * 0.6;
         
         const high = open * (1 + highChange);
         const low = open * (1 + lowChange);
@@ -418,7 +452,7 @@ class TickGenerator {
         const close = low + (high - low) * closeRatio;
         
         // Применяем SOFT BOUNDARIES (мягкие ограничения)
-        const maxDeviation = 0.15; // Максимум ±15% от базовой цены
+        const maxDeviation = 0.03; // Максимум ±3% от базовой цены (реалистично для форекса)
         const minPrice = this.basePrice * (1 - maxDeviation);
         const maxPrice = this.basePrice * (1 + maxDeviation);
         
@@ -461,15 +495,21 @@ class TickGenerator {
     }
     
     /**
+     * 🎯 Ограничение Gaussian random до ±N сигма (предотвращение выбросов)
+     */
+    clampGaussian(value, sigma) {
+        return Math.max(-sigma, Math.min(sigma, value));
+    }
+    
+    /**
      * (Старый метод - оставлен для совместимости с тиками в реальном времени)
      * Генерация следующей цены с трендами (из work4 + улучшения)
      */
     generateNextPrice(currentPrice, isHistorical = false) {
-        // 🎯 ПРАВИЛЬНАЯ ФОРМУЛА: tickVolatility = baseVolatility × √(tickIntervalMinutes)
-        // tickInterval = 500ms = 0.00833 минут
-        // Это даст правильную накопленную волатильность за любой таймфрейм
-        const tickIntervalMinutes = 0.00833; // 500ms = 0.00833 мин
-        const tickVolatility = this.volatility * Math.sqrt(tickIntervalMinutes);
+        // 🎯 ПРАВИЛЬНАЯ ФОРМУЛА: tickVolatility через новую функцию масштабирования
+        // tickInterval = 500ms = 0.5 сек
+        const tickIntervalSeconds = 0.5;
+        const tickVolatility = this.getScaledVolatility(tickIntervalSeconds);
         
         if (this.symbol === 'TEST_TEST1') {
             // 1. Плавный тренд (обновляем счётчик и направление)
@@ -593,8 +633,8 @@ class TickGenerator {
         const timeframeSeconds = config.seconds;
         const timeframeMinutes = timeframeSeconds / 60;
         
-        // 🎯 МАСШТАБИРУЕМАЯ ВОЛАТИЛЬНОСТЬ
-        const scaledVolatility = this.volatility * Math.sqrt(timeframeMinutes);
+        // 🎯 МАСШТАБИРУЕМАЯ ВОЛАТИЛЬНОСТЬ с новой формулой
+        const scaledVolatility = this.getScaledVolatility(timeframeSeconds);
         
         // Определяем с какого времени генерировать
         const oldestCandle = aggregator.candles[0];
