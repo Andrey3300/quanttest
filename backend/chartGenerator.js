@@ -100,7 +100,7 @@ const SYMBOL_CONFIG = {
     'TRX_OTC': { basePrice: 0.165, volatility: 0.16, type: 'CRYPTO' },
     'TON_OTC': { basePrice: 5.25, volatility: 0.18, type: 'CRYPTO' },
     'BTC_ETF_OTC': { basePrice: 67500, volatility: 0.10, type: 'CRYPTO' },
-    'TEST_TEST1': { basePrice: 1.0, volatility: 0.0020, type: 'FOREX' }, // 🎯 CALIBRATED: Увеличена волатильность для читаемых свечей на всех TF
+    'TEST_TEST1': { basePrice: 1.0, volatility: 0.0040, type: 'FOREX' }, // 🎯 FIXED: Увеличена волатильность в 2x для совпадения реалтайм и истории
     'BTC': { basePrice: 67500, volatility: 0.10, type: 'CRYPTO' },
     
     // Commodities - волатильность 0.06-0.16 (было 0.003-0.008)
@@ -190,9 +190,27 @@ class CandleAggregator {
             // создавая свечи где open=high=low=close ("ступеньки")
             // Теперь ВСЕ тики обрабатываются одинаково для всех таймфреймов
             
-            // Обновляем текущую свечу (все тики обрабатываются одинаково!)
-            this.currentCandle.high = Math.max(this.currentCandle.high, tick.price);
-            this.currentCandle.low = Math.min(this.currentCandle.low, tick.price);
+            // 🎨 ВИРТУАЛЬНЫЕ ТЕНИ: Добавляем случайное расширение high/low для совпадения с историей
+            // История имеет тени (shadows), реалтайм их не имел - это давало короткие свечи
+            const currentRange = this.currentCandle.high - this.currentCandle.low;
+            const shadowExpansion = currentRange * 0.15; // 15% расширение от текущего диапазона
+            
+            // Случайные тени с вероятностью 40% (чтобы не на каждом тике)
+            const rand = Math.random();
+            let virtualHigh = tick.price;
+            let virtualLow = tick.price;
+            
+            if (rand < 0.2) {
+                // 20% шанс: верхняя тень
+                virtualHigh = tick.price + (shadowExpansion * Math.random());
+            } else if (rand < 0.4) {
+                // 20% шанс: нижняя тень
+                virtualLow = tick.price - (shadowExpansion * Math.random());
+            }
+            
+            // Обновляем текущую свечу (с учетом виртуальных теней!)
+            this.currentCandle.high = Math.max(this.currentCandle.high, virtualHigh);
+            this.currentCandle.low = Math.min(this.currentCandle.low, virtualLow);
             this.currentCandle.close = tick.price;
             
             return { isNewCandle: false, currentCandle: { ...this.currentCandle } };
@@ -633,12 +651,12 @@ class TickGenerator {
             if (this.trendCounter <= 0) {
                 this.trendCounter = 40 + Math.random() * 80; // 40-120 тиков до смены тренда
                 this.trendDir = (Math.random() - 0.5) * 2; // -1..1 направление
-                // Сила тренда масштабируется также под тики
-                this.trendStrengthTest = tickVolatility * 0.3; // 30% от tick volatility
+                // 🔥 УСИЛЕН ТРЕНД: Было 0.3, стало 0.8 (для совпадения с историей)
+                this.trendStrengthTest = tickVolatility * 0.8;
             }
             
-            // 2. Волатильность (Gaussian random) - без фазовых модификаций
-            const randomChange = this.gaussianRandom() * tickVolatility;
+            // 2. 🔥 УСИЛЕНА ВОЛАТИЛЬНОСТЬ: Множитель 1.4x для совпадения с историей (тени + факторы)
+            const randomChange = this.gaussianRandom() * tickVolatility * 1.4;
             
             // 3. Имитация рыночного пульса (микро-волны)
             const pulse = Math.sin(Date.now() / 5000) * tickVolatility * 0.1; // 10% пульсация
