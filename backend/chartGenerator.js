@@ -415,6 +415,7 @@ class TickGenerator {
     
     /**
      * 🔥 ИСПРАВЛЕНО: Генерация реалистичных свечей (как Pocket Option / IQ Option)
+     * ФИКС: Open = basePrice (без разрывов!), High/Low охватывают тело + тени
      */
     generateCandle(basePrice, scaledVolatility, seed, timeframeMinutes) {
         // Seeded random для воспроизводимости
@@ -424,6 +425,10 @@ class TickGenerator {
         const random4 = this.seededRandom(seed + 3);
         const random5 = this.seededRandom(seed + 4);
         
+        // 🎯 ФИКС #1: Open ТОЧНО равен basePrice (close предыдущей свечи)
+        // Никаких случайных изменений! Это обеспечивает непрерывность графика
+        const open = basePrice;
+        
         // 🎯 SOFT BOUNDARIES: Mean reversion (возврат к базовой цене)
         const deviation = (basePrice - this.basePrice) / this.basePrice;
         const meanReversionForce = -deviation * 0.2; // 20% возврат к среднему
@@ -431,34 +436,31 @@ class TickGenerator {
         // 🌊 Трендовая составляющая (плавные волны)
         const trendForce = Math.sin(seed / 8000) * 0.0005; // Медленная синусоида
         
-        // 🎲 Случайное изменение Open (Gaussian random с ограничением до ±1.5σ)
+        // 🎲 Случайное изменение для CLOSE (Gaussian random с ограничением до ±1.5σ)
         const randomGaussian = this.clampGaussian(this.gaussianFromSeed(random, random2), 1.5);
-        const randomChange = randomGaussian * scaledVolatility * 0.5; // 50% от волатильности
+        const randomChange = randomGaussian * scaledVolatility * 0.8; // 80% от волатильности для тела
         
-        // 📊 Итоговое изменение цены Open
-        const priceChange = meanReversionForce + trendForce + randomChange;
-        const open = basePrice * (1 + priceChange);
+        // 📊 Генерируем Close относительно Open
+        const closeChangeTotal = meanReversionForce + trendForce + randomChange;
+        let close = open * (1 + closeChangeTotal);
         
-        // 🎯 ПРАВИЛЬНАЯ ГЕНЕРАЦИЯ HIGH/LOW: Маленькие тени (10-40% от волатильности)
-        const highGaussian = this.clampGaussian(Math.abs(this.gaussianFromSeed(random3, random4)), 0.7);
-        const lowGaussian = this.clampGaussian(Math.abs(this.gaussianFromSeed(random4, random3)), 0.7);
+        // 🎯 ФИКС #2: High/Low ОХВАТЫВАЮТ диапазон Open-Close + тени
+        // Определяем границы тела свечи
+        const bodyHigh = Math.max(open, close);
+        const bodyLow = Math.min(open, close);
         
-        // 🔥 УВЕЛИЧЕНЫ ТЕНИ: С 15-20% до 25-35% для читаемости
-        const shadowMultiplier = 0.25 + random5 * 0.10; // 0.25-0.35
-        const highChange = highGaussian * scaledVolatility * shadowMultiplier;
-        const lowChange = -lowGaussian * scaledVolatility * shadowMultiplier;
+        // Генерируем тени (фитили) от границ тела
+        const upperShadowGaussian = this.clampGaussian(Math.abs(this.gaussianFromSeed(random3, random4)), 1.0);
+        const lowerShadowGaussian = this.clampGaussian(Math.abs(this.gaussianFromSeed(random4, random3)), 1.0);
         
-        const high = open * (1 + highChange);
-        const low = open * (1 + lowChange);
+        // Размер теней: 20-50% от волатильности (читаемые фитили)
+        const shadowMultiplier = 0.3 + random5 * 0.2; // 0.3-0.5
+        const upperShadow = upperShadowGaussian * scaledVolatility * shadowMultiplier;
+        const lowerShadow = lowerShadowGaussian * scaledVolatility * shadowMultiplier;
         
-        // 🔥 УВЕЛИЧЕНО ТЕЛО СВЕЧИ: С 40% до 60% для читаемости
-        const closeDirection = this.gaussianFromSeed(random5, random3); // -3 до +3 (но обычно -1..+1)
-        const closeTrend = this.clampGaussian(closeDirection, 1.2); // ограничиваем до ±1.2σ
-        const closeChange = closeTrend * scaledVolatility * 0.60; // 60% от волатильности
-        let close = open * (1 + closeChange);
-        
-        // Ограничиваем Close между High и Low
-        close = Math.max(low, Math.min(high, close));
+        // High и Low выходят ЗА ПРЕДЕЛЫ тела свечи
+        const high = bodyHigh * (1 + upperShadow);
+        const low = bodyLow * (1 - lowerShadow);
         
         // 🎯 МЯГКИЕ ГРАНИЦЫ: Только для экстремальных отклонений (±5%)
         const maxDeviation = 0.05; // ±5% от базовой цены
