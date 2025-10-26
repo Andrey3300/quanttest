@@ -80,7 +80,7 @@ const SYMBOL_CONFIG = {
     'TRX_OTC': { basePrice: 0.165, volatility: 0.16, type: 'CRYPTO' },
     'TON_OTC': { basePrice: 5.25, volatility: 0.18, type: 'CRYPTO' },
     'BTC_ETF_OTC': { basePrice: 67500, volatility: 0.10, type: 'CRYPTO' },
-    'TEST_TEST1': { basePrice: 1.0, volatility: 0.00152, type: 'FOREX' }, // 🎯 CALIBRATED: baseVolatility для M1 (из реальных данных IQCent)
+    'TEST_TEST1': { basePrice: 1.0, volatility: 0.0006, type: 'FOREX' }, // 🎯 CALIBRATED: Уменьшена волатильность для реалистичных свечей
     'BTC': { basePrice: 67500, volatility: 0.10, type: 'CRYPTO' },
     
     // Commodities - волатильность 0.06-0.16 (было 0.003-0.008)
@@ -319,8 +319,9 @@ class TickGenerator {
             for (let i = 0; i < totalCandles; i++) {
                 const candleTime = Math.floor(currentTime / timeframeSeconds) * timeframeSeconds;
                 
-                // 🎯 SEEDED RANDOM: Используем timestamp + timeframe для воспроизводимости
-                const seed = candleTime + timeframe.charCodeAt(0);
+                // 🎯 SEEDED RANDOM: Уникальный seed для каждого таймфрейма
+                const timeframeId = timeframeSeconds; // Уникальный ID: 5, 10, 60, 300 и т.д.
+                const seed = candleTime * 1000 + timeframeId;
                 
                 // Генерируем OHLC для свечи с учетом масштабированной волатильности
                 const candle = this.generateCandle(price, scaledVolatility, seed, timeframeMinutes);
@@ -407,7 +408,7 @@ class TickGenerator {
     }
     
     /**
-     * 🔥 НОВАЯ СИСТЕМА: Генерация одной свечи с SOFT BOUNDARIES и масштабированной волатильностью
+     * 🔥 ИСПРАВЛЕНО: Генерация реалистичных свечей (как Pocket Option / IQ Option)
      */
     generateCandle(basePrice, scaledVolatility, seed, timeframeMinutes) {
         // Seeded random для воспроизводимости
@@ -415,65 +416,59 @@ class TickGenerator {
         const random2 = this.seededRandom(seed + 1);
         const random3 = this.seededRandom(seed + 2);
         const random4 = this.seededRandom(seed + 3);
+        const random5 = this.seededRandom(seed + 4);
         
         // 🎯 SOFT BOUNDARIES: Mean reversion (возврат к базовой цене)
-        // Чем дальше цена от базовой, тем сильнее тянет обратно
         const deviation = (basePrice - this.basePrice) / this.basePrice;
-        const meanReversionForce = -deviation * 0.3; // 30% возврат к среднему
+        const meanReversionForce = -deviation * 0.2; // 20% возврат к среднему
         
         // 🌊 Трендовая составляющая (плавные волны)
-        const trendForce = Math.sin(seed / 5000) * 0.001; // Медленная синусоида
+        const trendForce = Math.sin(seed / 8000) * 0.0005; // Медленная синусоида
         
-        // 🎲 Случайное изменение (Gaussian random с ограничением до ±2.5σ)
-        const randomGaussian = this.clampGaussian(this.gaussianFromSeed(random, random2), 2.5);
-        const randomChange = randomGaussian * scaledVolatility;
+        // 🎲 Случайное изменение Open (Gaussian random с ограничением до ±1.5σ)
+        const randomGaussian = this.clampGaussian(this.gaussianFromSeed(random, random2), 1.5);
+        const randomChange = randomGaussian * scaledVolatility * 0.5; // 50% от волатильности
         
         // 📊 Итоговое изменение цены Open
         const priceChange = meanReversionForce + trendForce + randomChange;
         const open = basePrice * (1 + priceChange);
         
-        // Генерируем High, Low, Close внутри свечи
-        // 🎯 РЕАЛИЗМ: Тело + тени (диапазон = 100%, тело = 40-70%, тени = остаток)
-        const totalRange = scaledVolatility * 1.2; // Полный диапазон свечи
-        const bodyRatio = 0.4 + random3 * 0.3; // Тело составляет 40-70% диапазона
+        // 🎯 ПРАВИЛЬНАЯ ГЕНЕРАЦИЯ HIGH/LOW: Маленькие тени (10-40% от волатильности)
+        const highGaussian = this.clampGaussian(Math.abs(this.gaussianFromSeed(random3, random4)), 0.7);
+        const lowGaussian = this.clampGaussian(Math.abs(this.gaussianFromSeed(random4, random3)), 0.7);
         
-        // High и Low относительно Open (с ограничением Gaussian)
-        const highGaussian = this.clampGaussian(Math.abs(this.gaussianFromSeed(random3, random4)), 2.0);
-        const lowGaussian = this.clampGaussian(Math.abs(this.gaussianFromSeed(random4, random3)), 2.0);
-        
-        const highChange = highGaussian * totalRange * 0.6;
-        const lowChange = -lowGaussian * totalRange * 0.6;
+        // Тени в 3-4 раза меньше чем было (было 0.6, стало 0.15-0.2)
+        const shadowMultiplier = 0.15 + random5 * 0.05; // 0.15-0.2
+        const highChange = highGaussian * scaledVolatility * shadowMultiplier;
+        const lowChange = -lowGaussian * scaledVolatility * shadowMultiplier;
         
         const high = open * (1 + highChange);
         const low = open * (1 + lowChange);
         
-        // Close где-то между High и Low (с небольшим смещением)
-        const closeRatio = random3 * 0.6 + 0.2; // 0.2 - 0.8
-        const close = low + (high - low) * closeRatio;
+        // 🎯 ПРАВИЛЬНАЯ ГЕНЕРАЦИЯ CLOSE: Движется от Open с трендом (не случайно!)
+        const closeDirection = this.gaussianFromSeed(random5, random3); // -3 до +3 (но обычно -1..+1)
+        const closeTrend = this.clampGaussian(closeDirection, 1.2); // ограничиваем до ±1.2σ
+        const closeChange = closeTrend * scaledVolatility * 0.4; // 40% от волатильности
+        let close = open * (1 + closeChange);
         
-        // Применяем SOFT BOUNDARIES (мягкие ограничения)
-        const maxDeviation = 0.03; // Максимум ±3% от базовой цены (реалистично для форекса)
+        // Ограничиваем Close между High и Low
+        close = Math.max(low, Math.min(high, close));
+        
+        // 🎯 МЯГКИЕ ГРАНИЦЫ: Только для экстремальных отклонений (±5%)
+        const maxDeviation = 0.05; // ±5% от базовой цены
         const minPrice = this.basePrice * (1 - maxDeviation);
         const maxPrice = this.basePrice * (1 + maxDeviation);
         
-        // Мягкое ограничение через tanh (плавное приближение к границам)
-        const softClamp = (value) => {
-            if (value < minPrice) {
-                const overshoot = (minPrice - value) / this.basePrice;
-                return minPrice - this.basePrice * 0.01 * Math.tanh(overshoot * 10);
-            }
-            if (value > maxPrice) {
-                const overshoot = (value - maxPrice) / this.basePrice;
-                return maxPrice + this.basePrice * 0.01 * Math.tanh(overshoot * 10);
-            }
-            return value;
+        // Простое ограничение (без tanh - он искажает данные)
+        const simpleClamp = (value) => {
+            return Math.max(minPrice, Math.min(maxPrice, value));
         };
         
         return {
-            open: softClamp(open),
-            high: softClamp(high),
-            low: softClamp(low),
-            close: softClamp(close)
+            open: simpleClamp(open),
+            high: simpleClamp(high),
+            low: simpleClamp(low),
+            close: simpleClamp(close)
         };
     }
     
@@ -648,8 +643,9 @@ class TickGenerator {
         for (let currentTime = startTime; currentTime < endTime; currentTime += timeframeSeconds) {
             const candleTime = Math.floor(currentTime / timeframeSeconds) * timeframeSeconds;
             
-            // 🎯 SEEDED RANDOM для воспроизводимости
-            const seed = candleTime + timeframe.charCodeAt(0);
+            // 🎯 SEEDED RANDOM: Уникальный seed для каждого таймфрейма
+            const timeframeId = timeframeSeconds;
+            const seed = candleTime * 1000 + timeframeId;
             
             // Генерируем свечу
             const candle = this.generateCandle(price, scaledVolatility, seed, timeframeMinutes);
