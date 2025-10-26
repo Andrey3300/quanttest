@@ -80,7 +80,7 @@ const SYMBOL_CONFIG = {
     'TRX_OTC': { basePrice: 0.165, volatility: 0.16, type: 'CRYPTO' },
     'TON_OTC': { basePrice: 5.25, volatility: 0.18, type: 'CRYPTO' },
     'BTC_ETF_OTC': { basePrice: 67500, volatility: 0.10, type: 'CRYPTO' },
-    'TEST_TEST1': { basePrice: 1.0, volatility: 0.0006, type: 'FOREX' }, // 🎯 CALIBRATED: Уменьшена волатильность для реалистичных свечей
+    'TEST_TEST1': { basePrice: 1.0, volatility: 0.0020, type: 'FOREX' }, // 🎯 CALIBRATED: Увеличена волатильность для читаемых свечей на всех TF
     'BTC': { basePrice: 67500, volatility: 0.10, type: 'CRYPTO' },
     
     // Commodities - волатильность 0.06-0.16 (было 0.003-0.008)
@@ -380,29 +380,35 @@ class TickGenerator {
     }
     
     /**
-     * 🎯 МАСШТАБИРОВАНИЕ ВОЛАТИЛЬНОСТИ: На основе реальных данных IQCent
-     * Волатильность растёт медленнее чем √t для длинных таймфреймов (эффект насыщения)
+     * 🎯 МАСШТАБИРОВАНИЕ ВОЛАТИЛЬНОСТИ: Комплексное решение для нормальной ВЫСОТЫ свечей
+     * Убрана агрессивная формула sqrt() для коротких таймфреймов
      */
     getScaledVolatility(timeframeSeconds) {
         // Базовая волатильность настроена для M1 (60 секунд)
         const baseSeconds = 60;
-        
-        // Коэффициенты на основе реальных данных IQCent:
-        // S5 (5s): 0.25x, M1 (60s): 1.0x, M5 (300s): 2.17x, M15 (900s): 3.18x, M30 (1800s): 3.60x
-        // Формула: k = √(t/base) для коротких TF, с насыщением для длинных
-        
         const ratio = timeframeSeconds / baseSeconds;
         
-        if (ratio <= 1) {
-            // Короткие таймфреймы (S5-M1): линейное масштабирование
-            const scalingFactor = Math.sqrt(ratio);
+        if (ratio < 0.15) {
+            // 🔥 ОЧЕНЬ КОРОТКИЕ (S5, S10 до 9 сек): Мягкое масштабирование 70-80%
+            // Без sqrt! Иначе свечи слишком короткие
+            const scalingFactor = 0.70 + (ratio * 0.67); // S5(5s)=0.76x, S10(10s)=0.81x
+            return this.volatility * scalingFactor;
+        } else if (ratio < 0.5) {
+            // 🔥 КОРОТКИЕ (S15, S30 до 30 сек): Умеренное масштабирование 80-90%
+            const scalingFactor = 0.80 + (ratio * 0.4); // S15(15s)=0.90x, S30(30s)=1.0x
+            return this.volatility * scalingFactor;
+        } else if (ratio <= 1) {
+            // 🔥 M1 (60 сек): Базовая волатильность 1.0x
+            return this.volatility;
+        } else if (ratio <= 5) {
+            // 🔥 СРЕДНИЕ (M2-M5): Умеренный рост через sqrt
+            const scalingFactor = Math.sqrt(ratio) * 1.15; // M2=1.63x, M5=2.57x
             return this.volatility * scalingFactor;
         } else {
-            // Длинные таймфреймы (M2-M30): с насыщением (логарифмический рост)
-            // k = √ratio * (1 + ln(ratio)/5) - формула с затуханием
+            // 🔥 ДЛИННЫЕ (M10-M30): С насыщением (логарифм)
             const sqrtRatio = Math.sqrt(ratio);
             const saturation = 1 + Math.log(ratio) / 5;
-            const scalingFactor = sqrtRatio * saturation;
+            const scalingFactor = sqrtRatio * saturation * 1.1; // M15=3.85x, M30=5.24x
             return this.volatility * scalingFactor;
         }
     }
@@ -437,18 +443,18 @@ class TickGenerator {
         const highGaussian = this.clampGaussian(Math.abs(this.gaussianFromSeed(random3, random4)), 0.7);
         const lowGaussian = this.clampGaussian(Math.abs(this.gaussianFromSeed(random4, random3)), 0.7);
         
-        // Тени в 3-4 раза меньше чем было (было 0.6, стало 0.15-0.2)
-        const shadowMultiplier = 0.15 + random5 * 0.05; // 0.15-0.2
+        // 🔥 УВЕЛИЧЕНЫ ТЕНИ: С 15-20% до 25-35% для читаемости
+        const shadowMultiplier = 0.25 + random5 * 0.10; // 0.25-0.35
         const highChange = highGaussian * scaledVolatility * shadowMultiplier;
         const lowChange = -lowGaussian * scaledVolatility * shadowMultiplier;
         
         const high = open * (1 + highChange);
         const low = open * (1 + lowChange);
         
-        // 🎯 ПРАВИЛЬНАЯ ГЕНЕРАЦИЯ CLOSE: Движется от Open с трендом (не случайно!)
+        // 🔥 УВЕЛИЧЕНО ТЕЛО СВЕЧИ: С 40% до 60% для читаемости
         const closeDirection = this.gaussianFromSeed(random5, random3); // -3 до +3 (но обычно -1..+1)
         const closeTrend = this.clampGaussian(closeDirection, 1.2); // ограничиваем до ±1.2σ
-        const closeChange = closeTrend * scaledVolatility * 0.4; // 40% от волатильности
+        const closeChange = closeTrend * scaledVolatility * 0.60; // 60% от волатильности
         let close = open * (1 + closeChange);
         
         // Ограничиваем Close между High и Low
