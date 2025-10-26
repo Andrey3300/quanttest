@@ -290,36 +290,41 @@ class TickGenerator {
     /**
      * Генерация следующей цены (Geometric Brownian Motion)
      * 🔥 ИСПРАВЛЕНО: Увеличена волатильность для красивых свечей
+     * 🎯 TEST_TEST1: Новые параметры для тестирования (компактные свечи как на Pocket Option)
      */
     generateNextPrice(currentPrice, isHistorical = false, seed = null) {
-        // 🔥 РАЗНАЯ ВОЛАТИЛЬНОСТЬ для исторических данных и реал-тайма
-        // Исторические: более плавные, красивые свечи с нормальным движением
-        // Реал-тайм: быстрые тики с меньшей волатильностью за тик
+        // 🎯 ТЕСТОВЫЕ ПАРАМЕТРЫ для TEST_TEST1 (компактные свечи, меньше волатильности)
+        const isTestSymbol = this.symbol === 'TEST_TEST1';
         
-        // Mean reversion к базовой цене (слабая сила)
+        // Mean reversion к базовой цене
         const deviation = (this.basePrice - currentPrice) / this.basePrice;
-        const returnForce = deviation * this.meanReversionSpeed * 0.001; // очень слабый
+        const returnForce = deviation * this.meanReversionSpeed * (isTestSymbol ? 0.03 : 0.001);
         
         // Случайный компонент с разной силой для истории и реал-тайма
         let randomShock;
         if (isHistorical) {
-            // 🔥 ИСТОРИЧЕСКИЕ ДАННЫЕ: Увеличенная волатильность для красивых свечей
-            // Используем детерминированную генерацию с уникальным seed'ом для каждого тика
-            randomShock = this.gaussianRandom(seed) * this.volatility * 0.08;
+            // Исторические данные: плавные свечи
+            const volatilityMultiplier = isTestSymbol ? 0.02 : 0.08;
+            randomShock = this.gaussianRandom(seed) * this.volatility * volatilityMultiplier;
         } else {
-            // 🔥 РЕАЛ-ТАЙМ: Меньшая волатильность для плавности
-            randomShock = this.gaussianRandom() * this.volatility * 0.02;
+            // Реал-тайм: быстрые тики
+            const volatilityMultiplier = isTestSymbol ? 0.01 : 0.02;
+            randomShock = this.gaussianRandom() * this.volatility * volatilityMultiplier;
         }
         
         // Новая цена
         let newPrice = currentPrice * (1 + returnForce + randomShock);
         
         // Ограничиваем максимальное изменение за тик
-        const maxChange = currentPrice * (isHistorical ? 0.01 : 0.005); // для истории больше
+        const maxChangeHistorical = isTestSymbol ? 0.002 : 0.01;
+        const maxChangeRealtime = isTestSymbol ? 0.001 : 0.005;
+        const maxChange = currentPrice * (isHistorical ? maxChangeHistorical : maxChangeRealtime);
         newPrice = Math.max(currentPrice - maxChange, Math.min(currentPrice + maxChange, newPrice));
         
-        // Ограничиваем общий диапазон (±15% от базы для истории, ±10% для реал-тайма)
-        const rangeMultiplier = isHistorical ? 0.15 : 0.10;
+        // Ограничиваем общий диапазон
+        const rangeHistorical = isTestSymbol ? 0.05 : 0.15;
+        const rangeRealtime = isTestSymbol ? 0.03 : 0.10;
+        const rangeMultiplier = isHistorical ? rangeHistorical : rangeRealtime;
         newPrice = Math.max(newPrice, this.basePrice * (1 - rangeMultiplier));
         newPrice = Math.min(newPrice, this.basePrice * (1 + rangeMultiplier));
         
