@@ -63,6 +63,25 @@ class ChartManager {
         return this.INITIAL_CANDLES_BY_TIMEFRAME[timeframe] || 100;
     }
 
+    // 🎯 НОВОЕ: Получить оптимальное количество ВИДИМЫХ свечей для текущего таймфрейма
+    // Это предотвращает "схлопывание" графика при большой истории
+    getOptimalVisibleCandles() {
+        const visibleByTimeframe = {
+            'S5': 100,   // 5 сек × 100 = ~8 минут видимых
+            'S10': 90,   // 10 сек × 90 = ~15 минут видимых
+            'S15': 80,   // 15 сек × 80 = ~20 минут видимых
+            'S30': 70,   // 30 сек × 70 = ~35 минут видимых
+            'M1': 60,    // 1 мин × 60 = ~1 час видимых
+            'M2': 60,    // 2 мин × 60 = ~2 часа видимых
+            'M3': 60,    // 3 мин × 60 = ~3 часа видимых
+            'M5': 60,    // 5 мин × 60 = ~5 часов видимых
+            'M10': 50,   // 10 мин × 50 = ~8 часов видимых
+            'M15': 50,   // 15 мин × 50 = ~12 часов видимых
+            'M30': 50    // 30 мин × 50 = ~25 часов видимых
+        };
+        return visibleByTimeframe[this.timeframe] || 80;
+    }
+
     // Инициализация графика
     async init() {
         const chartContainer = document.getElementById('chart');
@@ -92,19 +111,24 @@ class ChartManager {
             rightPriceScale: {
                 borderColor: '#2d3748',
                 scaleMargins: {
-                    top: 0.25,    // 🔥 Увеличено с 0.1 до 0.25 для лучшей видимости свечей
-                    bottom: 0.25, // 🔥 Увеличено с 0.1 до 0.25
+                    top: 0.10,    // 🎯 ФИКС: Уменьшено с 0.25 до 0.10 для стабильного масштаба (IQOption стиль)
+                    bottom: 0.10, // 🎯 ФИКС: Уменьшено с 0.25 до 0.10 (предотвращает сжатие истории)
                 },
                 mode: LightweightCharts.PriceScaleMode.Normal,
                 autoScale: true,
+                // 🎯 КРИТИЧНО: Минимальный видимый диапазон для предотвращения "схлопывания"
+                minimumWidth: 0,
             },
             timeScale: {
                 borderColor: '#2d3748',
                 timeVisible: true,
                 secondsVisible: true,
-                barSpacing: 18,       // 🔥 Увеличено с 8 до 18 для более читаемых свечей
+                barSpacing: 12,       // 🎯 ФИКС: Уменьшено с 18 до 12 для баланса (больше свечей видно)
                 minBarSpacing: 4,
                 rightOffset: 50,
+                fixLeftEdge: false,   // Разрешаем скролл влево
+                fixRightEdge: false,  // Разрешаем скролл вправо
+                lockVisibleTimeRangeOnResize: true, // Сохраняем видимый диапазон при ресайзе
             },
             // 🎯 ФОРМАТИРОВАНИЕ ЦЕНЫ: Показываем точные значения (18.5000 вместо 18.75)
             localization: {
@@ -328,7 +352,7 @@ class ChartManager {
 
         // Получаем текущую позицию скролла перед обновлением
         const timeScale = this.chart.timeScale();
-        const visibleRange = timeScale.getVisibleRange();
+        const visibleRange = timeScale.getVisibleLogicalRange(); // 🎯 ФИКС: Используем логический диапазон (индексы)
 
         // Обновляем данные для всех серий
         this.candleSeries.setData(this.candles);
@@ -337,7 +361,16 @@ class ChartManager {
 
         // Восстанавливаем видимый диапазон (чтобы не прыгало)
         if (visibleRange) {
-            timeScale.setVisibleRange(visibleRange);
+            // Сдвигаем диапазон на количество добавленных свечей
+            const addedCandles = this.candles.length - (visibleRange.to || 0);
+            if (addedCandles > 0) {
+                timeScale.setVisibleLogicalRange({
+                    from: visibleRange.from + addedCandles,
+                    to: visibleRange.to + addedCandles
+                });
+            } else {
+                timeScale.setVisibleLogicalRange(visibleRange);
+            }
         }
     }
 
@@ -412,10 +445,23 @@ class ChartManager {
         this.lineSeries.setData(this.candles.map(c => ({ time: c.time, value: c.close })));
         this.barSeries.setData(this.candles);
 
-        // Подгоняем видимый диапазон
+        // 🎯 ФИКС: Умное позиционирование графика (показываем последние 80-120 свечей)
         if (this.candles.length > 0) {
-            const lastCandle = this.candles[this.candles.length - 1];
-            this.chart.timeScale().scrollToPosition(5, true);
+            const timeScale = this.chart.timeScale();
+            
+            // Вычисляем оптимальное количество видимых свечей (зависит от таймфрейма)
+            const optimalVisibleCandles = this.getOptimalVisibleCandles();
+            
+            // Устанавливаем видимый диапазон (последние N свечей)
+            const fromIndex = Math.max(0, this.candles.length - optimalVisibleCandles);
+            const toIndex = this.candles.length - 1;
+            
+            if (fromIndex < toIndex) {
+                timeScale.setVisibleLogicalRange({
+                    from: fromIndex,
+                    to: toIndex + 5 // +5 свечей справа для "дыхания"
+                });
+            }
         }
     }
 
@@ -546,6 +592,9 @@ class ChartManager {
             this.updatePriceLine(price);
             this.updatePriceDisplay(price);
         }
+        
+        // 🎯 ФИКС: Автоскролл к последней свече (только если пользователь не скроллит назад)
+        this.autoScrollToLatest();
     }
 
     // 🎯 НОВОЕ: Обработка новой завершенной свечи от СЕРВЕРА
@@ -618,6 +667,9 @@ class ChartManager {
             cancelAnimationFrame(this.animationFrameId);
             this.animationFrameId = null;
         }
+        
+        // 🎯 ФИКС: Автоскролл к последней свече при появлении новой
+        this.autoScrollToLatest();
     }
 
     // Обновление линии текущей цены (60fps - синхронно с интерполяцией!)
@@ -971,6 +1023,32 @@ class ChartManager {
             default:
                 return this.candleSeries;
         }
+    }
+
+    // 🎯 НОВОЕ: Автоскролл к последней свече (только если пользователь не скроллит назад)
+    autoScrollToLatest() {
+        if (!this.chart || this.candles.length === 0) return;
+        
+        const timeScale = this.chart.timeScale();
+        const visibleRange = timeScale.getVisibleLogicalRange();
+        
+        if (!visibleRange) return;
+        
+        // Проверяем, смотрит ли пользователь на последние свечи
+        const totalCandles = this.candles.length;
+        const isNearEnd = (totalCandles - visibleRange.to) < 10; // В пределах 10 свечей от конца
+        
+        if (isNearEnd) {
+            // Пользователь смотрит на конец графика - скроллим автоматически
+            const optimalVisible = this.getOptimalVisibleCandles();
+            const fromIndex = Math.max(0, totalCandles - optimalVisible);
+            
+            timeScale.setVisibleLogicalRange({
+                from: fromIndex,
+                to: totalCandles + 5 // +5 для "дыхания" справа
+            });
+        }
+        // Иначе пользователь смотрит историю - не мешаем
     }
 
     // Обработка ресайза
