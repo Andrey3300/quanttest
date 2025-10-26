@@ -21,11 +21,25 @@ class ChartManager {
         // 🎯 PAGINATION: Lazy loading состояние
         this.hasMore = true; // Есть ли еще данные для загрузки
         this.isLoadingMore = false; // Идет ли загрузка дополнительных данных
-        this.INITIAL_CANDLES = 200; // Количество свечей при первой загрузке
         this.LOAD_MORE_CANDLES = 100; // Количество свечей при подгрузке
         
         // Линия цены
         this.expirationPriceLine = null;
+        
+        // 🎯 АДАПТИВНОЕ КОЛИЧЕСТВО СВЕЧЕЙ: Разное для разных таймфреймов
+        this.INITIAL_CANDLES_BY_TIMEFRAME = {
+            'S5': 200,   // 5 сек × 200 = ~16 минут
+            'S10': 180,  // 10 сек × 180 = ~30 минут
+            'S15': 150,  // 15 сек × 150 = ~37 минут
+            'S30': 120,  // 30 сек × 120 = ~60 минут
+            'M1': 100,   // 1 мин × 100 = ~1.7 часа
+            'M2': 90,    // 2 мин × 90 = ~3 часа
+            'M3': 80,    // 3 мин × 80 = ~4 часа
+            'M5': 70,    // 5 мин × 70 = ~6 часов
+            'M10': 60,   // 10 мин × 60 = ~10 часов
+            'M15': 50,   // 15 мин × 50 = ~12 часов
+            'M30': 40    // 30 мин × 40 = ~20 часов
+        };
         
         // WebSocket управление
         this.connectionId = 0;
@@ -42,6 +56,11 @@ class ChartManager {
         this.baseInterpolationDuration = 400; // Базовая длительность для плавности (400ms для комфортной анимации)
         this.animationFrameId = null; // ID для requestAnimationFrame
         this.lastTickTime = 0; // Время последнего тика
+    }
+    
+    // 🎯 Получить количество свечей для загрузки в зависимости от таймфрейма
+    getInitialCandlesCount(timeframe) {
+        return this.INITIAL_CANDLES_BY_TIMEFRAME[timeframe] || 100;
     }
 
     // Инициализация графика
@@ -203,10 +222,12 @@ class ChartManager {
         if (!symbol) symbol = this.symbol;
 
         try {
-            console.log(`📥 Loading ${symbol} ${timeframe} candles (first ${this.INITIAL_CANDLES})...`);
+            // 🎯 АДАПТИВНОЕ КОЛИЧЕСТВО: Разное для каждого таймфрейма
+            const candlesCount = this.getInitialCandlesCount(timeframe);
+            console.log(`📥 Loading ${symbol} ${timeframe} candles (first ${candlesCount})...`);
 
-            // 🎯 PAGINATION: Загружаем только последние 200 свечей
-            const response = await fetch(`${API_URL}/api/chart/history?symbol=${symbol}&timeframe=${timeframe}&limit=${this.INITIAL_CANDLES}`);
+            // 🎯 PAGINATION: Загружаем адаптивное количество свечей
+            const response = await fetch(`${API_URL}/api/chart/history?symbol=${symbol}&timeframe=${timeframe}&limit=${candlesCount}`);
             
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}`);

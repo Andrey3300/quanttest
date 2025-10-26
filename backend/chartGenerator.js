@@ -182,6 +182,12 @@ class TickGenerator {
         this.drift = 0.0;
         this.meanReversionSpeed = 0.05;
         
+        // 🌊 СИСТЕМА ВОЛНООБРАЗНОГО ДВИЖЕНИЯ (из work4)
+        this.currentDrift = 0.0; // текущий динамический тренд (изменяется со временем)
+        this.trendChangeCounter = 0; // счетчик для смены тренда
+        this.trendChangePeriod = this.randomInt(30, 80); // меняем тренд каждые 30-80 свечей
+        this.trendStrength = 0.0002; // сила тренда (для создания волн)
+        
         // Агрегаторы для всех таймфреймов
         this.aggregators = {};
         Object.keys(TIMEFRAMES).forEach(tf => {
@@ -227,6 +233,58 @@ class TickGenerator {
     }
     
     /**
+     * Генерация случайного целого числа в диапазоне [min, max]
+     */
+    randomInt(min, max) {
+        return Math.floor(Math.random() * (max - min + 1)) + min;
+    }
+    
+    /**
+     * 🌊 Обновление тренда для создания волнообразного движения (из work4)
+     */
+    updateTrend() {
+        this.trendChangeCounter++;
+        
+        // Пришло время сменить тренд?
+        if (this.trendChangeCounter >= this.trendChangePeriod) {
+            // Генерируем новый тренд (может быть восходящим, нисходящим или нейтральным)
+            const trendType = Math.random();
+            
+            if (trendType < 0.35) {
+                // Восходящий тренд (35%)
+                const u1 = Math.random();
+                const u2 = Math.random();
+                const z0 = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+                this.currentDrift = this.trendStrength * (1.0 + z0 * 0.3);
+            } else if (trendType < 0.70) {
+                // Нисходящий тренд (35%)
+                const u1 = Math.random();
+                const u2 = Math.random();
+                const z0 = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+                this.currentDrift = -this.trendStrength * (1.0 + z0 * 0.3);
+            } else {
+                // Боковое движение (30%)
+                const u1 = Math.random();
+                const u2 = Math.random();
+                const z0 = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+                this.currentDrift = this.trendStrength * (z0 * 0.5);
+            }
+            
+            // Сбрасываем счетчик и генерируем новый период
+            this.trendChangeCounter = 0;
+            this.trendChangePeriod = this.randomInt(30, 80);
+        } else {
+            // Плавное изменение текущего тренда (добавляем небольшой шум)
+            const u1 = Math.random();
+            const u2 = Math.random();
+            const z0 = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+            this.currentDrift += z0 * this.trendStrength * 0.1;
+            // Ограничиваем тренд чтобы он не улетал слишком далеко
+            this.currentDrift = Math.max(-this.trendStrength * 2, Math.min(this.trendStrength * 2, this.currentDrift));
+        }
+    }
+    
+    /**
      * Генерация исторических данных за 30 дней
      */
     async generateHistoricalData() {
@@ -241,12 +299,8 @@ class TickGenerator {
         let price = this.basePrice;
         
         for (let i = 0; i < totalTicks; i++) {
-            // 🔥 УНИКАЛЬНЫЙ SEED для каждого тика: symbol + timestamp
-            // Это гарантирует отсутствие повторяющихся паттернов!
-            const tickSeed = this.symbol + '_' + Math.floor(currentTime * 1000);
-            
-            // Генерируем изменение цены с уникальным seed'ом для этого тика
-            price = this.generateNextPrice(price, true, tickSeed);
+            // Генерируем изменение цены БЕЗ seed (плавные тренды)
+            price = this.generateNextPrice(price, true);
             
             // Создаем тик
             const tick = {
@@ -288,45 +342,30 @@ class TickGenerator {
     }
     
     /**
-     * Генерация следующей цены (Geometric Brownian Motion)
-     * 🔥 ИСПРАВЛЕНО: Увеличена волатильность для красивых свечей
-     * 🎯 TEST_TEST1: Новые параметры для тестирования (компактные свечи как на Pocket Option)
+     * Генерация следующей цены с трендами (из work4 + улучшения)
      */
-    generateNextPrice(currentPrice, isHistorical = false, seed = null) {
-        // 🎯 ТЕСТОВЫЕ ПАРАМЕТРЫ для TEST_TEST1 (компактные свечи, меньше волатильности)
-        const isTestSymbol = this.symbol === 'TEST_TEST1';
+    generateNextPrice(currentPrice, isHistorical = false) {
+        // 🌊 Обновляем тренд для волнообразного движения
+        this.updateTrend();
         
-        // Mean reversion к базовой цене
-        const deviation = (this.basePrice - currentPrice) / this.basePrice;
-        const returnForce = deviation * this.meanReversionSpeed * (isTestSymbol ? 0.03 : 0.001);
+        // Mean reversion: цена стремится вернуться к базовой (адаптивная сила)
+        const deviation = Math.abs(currentPrice - this.basePrice) / this.basePrice;
+        const adaptiveMeanReversion = this.meanReversionSpeed * Math.pow(deviation * 10, 1.5);
+        const meanReversionForce = (this.basePrice - currentPrice) * adaptiveMeanReversion;
         
-        // Случайный компонент с разной силой для истории и реал-тайма
-        let randomShock;
-        if (isHistorical) {
-            // Исторические данные: плавные свечи
-            const volatilityMultiplier = isTestSymbol ? 0.005 : 0.08;
-            randomShock = this.gaussianRandom(seed) * this.volatility * volatilityMultiplier;
-        } else {
-            // Реал-тайм: быстрые тики
-            const volatilityMultiplier = isTestSymbol ? 0.003 : 0.02;
-            randomShock = this.gaussianRandom() * this.volatility * volatilityMultiplier;
-        }
+        // Geometric Brownian Motion с динамическим трендом
+        const randomShock = this.gaussianRandom() * this.volatility;
+        const priceChange = this.currentDrift + meanReversionForce + randomShock;
         
-        // Новая цена
-        let newPrice = currentPrice * (1 + returnForce + randomShock);
+        // Ограничиваем максимальное изменение
+        const maxCandleChange = 0.015; // 1.5%
+        const limitedChange = Math.max(-maxCandleChange, Math.min(maxCandleChange, priceChange));
         
-        // Ограничиваем максимальное изменение за тик
-        const maxChangeHistorical = isTestSymbol ? 0.0003 : 0.01;
-        const maxChangeRealtime = isTestSymbol ? 0.0002 : 0.005;
-        const maxChange = currentPrice * (isHistorical ? maxChangeHistorical : maxChangeRealtime);
-        newPrice = Math.max(currentPrice - maxChange, Math.min(currentPrice + maxChange, newPrice));
+        let newPrice = currentPrice * (1 + limitedChange);
         
-        // Ограничиваем общий диапазон
-        const rangeHistorical = isTestSymbol ? 0.005 : 0.15;
-        const rangeRealtime = isTestSymbol ? 0.003 : 0.10;
-        const rangeMultiplier = isHistorical ? rangeHistorical : rangeRealtime;
-        newPrice = Math.max(newPrice, this.basePrice * (1 - rangeMultiplier));
-        newPrice = Math.min(newPrice, this.basePrice * (1 + rangeMultiplier));
+        // Убедимся что цена положительная и в разумных пределах
+        newPrice = Math.max(newPrice, this.basePrice * 0.9);
+        newPrice = Math.min(newPrice, this.basePrice * 1.1);
         
         // Округляем до разумного количества знаков
         const decimals = this.basePrice < 1 ? 6 : this.basePrice < 100 ? 4 : 2;
@@ -334,43 +373,13 @@ class TickGenerator {
     }
     
     /**
-     * Нормальное распределение (Box-Muller)
-     * @param {string|null} seed - Опциональный seed для детерминированной генерации
+     * Нормальное распределение (Box-Muller) БЕЗ seed
      */
-    gaussianRandom(seed = null) {
+    gaussianRandom() {
         let u = 0, v = 0;
-        
-        if (seed !== null) {
-            // Детерминированная генерация для исторических данных
-            // Используем hash от seed для получения двух случайных чисел
-            const hash1 = this.hashSeed(seed + '_u');
-            const hash2 = this.hashSeed(seed + '_v');
-            u = hash1;
-            v = hash2;
-        } else {
-            // Обычная генерация для реал-тайма
-            while (u === 0) u = Math.random();
-            while (v === 0) v = Math.random();
-        }
-        
+        while (u === 0) u = Math.random();
+        while (v === 0) v = Math.random();
         return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
-    }
-    
-    /**
-     * Преобразование строки в число от 0 до 1 (детерминированно)
-     */
-    hashSeed(str) {
-        let hash = 0;
-        for (let i = 0; i < str.length; i++) {
-            const char = str.charCodeAt(i);
-            hash = ((hash << 5) - hash) + char;
-            hash = hash & hash; // Convert to 32bit integer
-        }
-        // Преобразуем в положительное число и нормализуем к (0, 1)
-        // Используем большое простое число для лучшего распределения
-        const normalized = Math.abs(hash % 2147483647) / 2147483647;
-        // Гарантируем что не будет 0
-        return normalized === 0 ? 0.0001 : normalized;
     }
     
     /**
