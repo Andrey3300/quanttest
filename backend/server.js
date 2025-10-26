@@ -260,7 +260,7 @@ app.post('/api/switch-account', authenticateToken, (req, res) => {
 
 // ===== CHART API =====
 
-// 🎯 НОВОЕ: Получение исторических свечей для таймфрейма
+// 🎯 НОВОЕ: Получение исторических свечей для таймфрейма (с PAGINATION!)
 app.get('/api/chart/history', (req, res) => {
   try {
     const symbol = req.query.symbol || 'USD_MXN_OTC';
@@ -268,19 +268,26 @@ app.get('/api/chart/history', (req, res) => {
     const from = req.query.from ? parseInt(req.query.from) : null;
     const to = req.query.to ? parseInt(req.query.to) : null;
     
+    // 🎯 PAGINATION: Новые параметры
+    const limit = req.query.limit ? parseInt(req.query.limit) : null;
+    const before = req.query.before ? parseInt(req.query.before) : null;
+    
     const generator = getGenerator(symbol);
     
     if (!generator.initialized) {
       return res.status(503).json({ error: 'Generator not ready yet' });
     }
     
-    const candles = generator.getCandles(timeframe, from, to);
+    const candles = generator.getCandles(timeframe, from, to, limit, before);
     
     res.json({
       symbol,
       timeframe,
       candles,
-      currentPrice: generator.getCurrentPrice()
+      currentPrice: generator.getCurrentPrice(),
+      // 🎯 PAGINATION: Метаданные для клиента
+      hasMore: candles.length > 0 && candles.length === limit, // Есть ли еще данные
+      oldestTime: candles.length > 0 ? candles[0].time : null // Время самой старой свечи
     });
   } catch (error) {
     console.error('Chart history error:', error);

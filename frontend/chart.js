@@ -18,6 +18,12 @@ class ChartManager {
         this.currentCandle = null; // Текущая формирующаяся свеча
         this.currentPrice = null;
         
+        // 🎯 PAGINATION: Lazy loading состояние
+        this.hasMore = true; // Есть ли еще данные для загрузки
+        this.isLoadingMore = false; // Идет ли загрузка дополнительных данных
+        this.INITIAL_CANDLES = 200; // Количество свечей при первой загрузке
+        this.LOAD_MORE_CANDLES = 100; // Количество свечей при подгрузке
+        
         // Линия цены
         this.expirationPriceLine = null;
         
@@ -145,6 +151,9 @@ class ChartManager {
         // Обработка ресайза
         window.addEventListener('resize', () => this.handleResize());
 
+        // 🎯 PAGINATION: Отслеживание скролла для lazy loading
+        this.setupScrollListener();
+
         console.log('📊 Chart initialized, loading data...');
 
         // 🎯 ЗАГРУЖАЕМ НАЧАЛЬНЫЕ ДАННЫЕ
@@ -189,14 +198,15 @@ class ChartManager {
         }
     }
 
-    // 🎯 НОВОЕ: Загрузка исторических данных с сервера
+    // 🎯 НОВОЕ: Загрузка исторических данных с сервера (с PAGINATION!)
     async loadHistoricalData(symbol, timeframe = this.timeframe) {
         if (!symbol) symbol = this.symbol;
 
         try {
-            console.log(`📥 Loading ${symbol} ${timeframe} candles...`);
+            console.log(`📥 Loading ${symbol} ${timeframe} candles (first ${this.INITIAL_CANDLES})...`);
 
-            const response = await fetch(`${API_URL}/api/chart/history?symbol=${symbol}&timeframe=${timeframe}`);
+            // 🎯 PAGINATION: Загружаем только последние 200 свечей
+            const response = await fetch(`${API_URL}/api/chart/history?symbol=${symbol}&timeframe=${timeframe}&limit=${this.INITIAL_CANDLES}`);
             
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}`);
@@ -206,8 +216,9 @@ class ChartManager {
             
             this.candles = data.candles || [];
             this.currentPrice = data.currentPrice;
+            this.hasMore = data.hasMore || false; // Есть ли еще данные
 
-            console.log(`✅ Loaded ${this.candles.length} ${timeframe} candles`);
+            console.log(`✅ Loaded ${this.candles.length} ${timeframe} candles (hasMore: ${this.hasMore})`);
 
             // 🎯 Обновляем priceFormat на основе текущей цены
             if (this.currentPrice) {
@@ -233,6 +244,113 @@ class ChartManager {
                 timeframe,
                 error: error.message
             });
+        }
+    }
+
+    // 🎯 PAGINATION: Подгрузка дополнительных свечей (lazy loading)
+    async loadMoreCandles() {
+        // Проверяем что не идет уже загрузка и есть еще данные
+        if (this.isLoadingMore || !this.hasMore || this.candles.length === 0) {
+            return;
+        }
+
+        try {
+            this.isLoadingMore = true;
+            
+            // Получаем время самой старой свечи
+            const oldestTime = this.candles[0].time;
+            
+            console.log(`📥 Loading more candles before ${new Date(oldestTime * 1000).toISOString()}...`);
+
+            // Запрашиваем еще 100 свечей ДО самой старой
+            const response = await fetch(
+                `${API_URL}/api/chart/history?symbol=${this.symbol}&timeframe=${this.timeframe}&limit=${this.LOAD_MORE_CANDLES}&before=${oldestTime}`
+            );
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const data = await response.json();
+            const newCandles = data.candles || [];
+            
+            if (newCandles.length === 0) {
+                console.log('⚠️ No more candles to load');
+                this.hasMore = false;
+                return;
+            }
+
+            console.log(`✅ Loaded ${newCandles.length} more candles (hasMore: ${data.hasMore})`);
+
+            // Добавляем новые свечи В НАЧАЛО массива
+            this.candles = [...newCandles, ...this.candles];
+            this.hasMore = data.hasMore || false;
+
+            // 🎯 ВАЖНО: Обновляем график с сохранением текущей позиции скролла
+            this.updateChartWithNewCandles();
+
+        } catch (error) {
+            console.error('Failed to load more candles:', error);
+            window.errorLogger?.error('chart', 'Failed to load more', {
+                symbol: this.symbol,
+                timeframe: this.timeframe,
+                error: error.message
+            });
+        } finally {
+            this.isLoadingMore = false;
+        }
+    }
+
+    // 🎯 PAGINATION: Обновление графика с новыми свечами (без потери позиции скролла)
+    updateChartWithNewCandles() {
+        if (!this.candleSeries || !this.lineSeries || !this.barSeries) return;
+
+        // Получаем текущую позицию скролла перед обновлением
+        const timeScale = this.chart.timeScale();
+        const visibleRange = timeScale.getVisibleRange();
+
+        // Обновляем данные для всех серий
+        this.candleSeries.setData(this.candles);
+        this.lineSeries.setData(this.candles.map(c => ({ time: c.time, value: c.close })));
+        this.barSeries.setData(this.candles);
+
+        // Восстанавливаем видимый диапазон (чтобы не прыгало)
+        if (visibleRange) {
+            timeScale.setVisibleRange(visibleRange);
+        }
+    }
+
+    // 🎯 PAGINATION: Настройка отслеживания скролла для lazy loading
+    setupScrollListener() {
+        if (!this.chart) return;
+
+        const timeScale = this.chart.timeScale();
+        
+        // Подписываемся на изменение видимого диапазона (включает скролл)
+        timeScale.subscribeVisibleLogicalRangeChange(() => {
+            this.checkIfNeedLoadMore();
+        });
+    }
+
+    // 🎯 PAGINATION: Проверка нужно ли подгружать еще данные
+    checkIfNeedLoadMore() {
+        if (!this.chart || !this.hasMore || this.isLoadingMore || this.candles.length === 0) {
+            return;
+        }
+
+        const timeScale = this.chart.timeScale();
+        const logicalRange = timeScale.getVisibleLogicalRange();
+        
+        if (!logicalRange) return;
+
+        // Порог для подгрузки: если видим начало данных (первые 20 свечей)
+        const LOAD_THRESHOLD = 20;
+        
+        // logicalRange.from - это индекс первой видимой свечи
+        // Если пользователь скроллит влево и близок к началу - подгружаем
+        if (logicalRange.from <= LOAD_THRESHOLD) {
+            console.log('🔄 Near start of data, loading more candles...');
+            this.loadMoreCandles();
         }
     }
 
@@ -519,6 +637,10 @@ class ChartManager {
         this.targetCandle = null;
         this.interpolationStartTime = null;
 
+        // 🎯 PAGINATION: Сбрасываем состояние пагинации
+        this.hasMore = true;
+        this.isLoadingMore = false;
+
         // 🔒 ШАГ 3: Обновляем таймфрейм
         this.timeframe = timeframe;
         localStorage.setItem('chartTimeframe', timeframe);
@@ -585,6 +707,10 @@ class ChartManager {
         this.currentInterpolatedCandle = null;
         this.targetCandle = null;
         this.interpolationStartTime = null;
+
+        // 🎯 PAGINATION: Сбрасываем состояние пагинации
+        this.hasMore = true;
+        this.isLoadingMore = false;
 
         // 🔒 ШАГ 3: Обновляем символ
         this.symbol = newSymbol;
