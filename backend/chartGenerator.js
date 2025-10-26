@@ -80,7 +80,7 @@ const SYMBOL_CONFIG = {
     'TRX_OTC': { basePrice: 0.165, volatility: 0.16, type: 'CRYPTO' },
     'TON_OTC': { basePrice: 5.25, volatility: 0.18, type: 'CRYPTO' },
     'BTC_ETF_OTC': { basePrice: 67500, volatility: 0.10, type: 'CRYPTO' },
-    'TEST_TEST1': { basePrice: 1.0, volatility: 0.008, type: 'CRYPTO' },
+    'TEST_TEST1': { basePrice: 1.0, volatility: 0.002, type: 'CRYPTO' }, // 🔥 Базовая волатильность снижена - будет усилена в generateNextPrice
     'BTC': { basePrice: 67500, volatility: 0.10, type: 'CRYPTO' },
     
     // Commodities - волатильность 0.06-0.16 (было 0.003-0.008)
@@ -187,6 +187,13 @@ class TickGenerator {
         this.trendChangeCounter = 0; // счетчик для смены тренда
         this.trendChangePeriod = this.randomInt(30, 80); // меняем тренд каждые 30-80 свечей
         this.trendStrength = 0.0002; // сила тренда (для создания волн)
+        
+        // 🎯 ТРЁХУРОВНЕВАЯ СИСТЕМА ДЛЯ TEST/TEST1 (IQ Option / Quotex стиль)
+        if (symbol === 'TEST_TEST1') {
+            this.trendCounter = 40 + Math.random() * 80; // Счётчик до смены тренда (40-120 свечей)
+            this.trendDir = (Math.random() - 0.5) * 2; // Направление тренда (-1..1)
+            this.trendStrengthTest = 0.0003 + Math.random() * 0.0012; // Сила тренда (0.0003-0.0015)
+        }
         
         // Агрегаторы для всех таймфреймов
         this.aggregators = {};
@@ -345,7 +352,35 @@ class TickGenerator {
      * Генерация следующей цены с трендами (из work4 + улучшения)
      */
     generateNextPrice(currentPrice, isHistorical = false) {
-        // 🌊 Обновляем тренд для волнообразного движения
+        // 🎯 СПЕЦИАЛЬНАЯ ЛОГИКА ДЛЯ TEST/TEST1: Трёхуровневая система
+        if (this.symbol === 'TEST_TEST1') {
+            // 1. Плавный тренд (обновляем счётчик и направление)
+            this.trendCounter--;
+            if (this.trendCounter <= 0) {
+                this.trendCounter = 40 + Math.random() * 80; // 40-120 свечей
+                this.trendDir = (Math.random() - 0.5) * 2; // -1..1
+                this.trendStrengthTest = 0.0003 + Math.random() * 0.0012; // 0.0003-0.0015
+            }
+            
+            // 2. Волатильность (рынок "шумит") - УВЕЛИЧЕНА В 2-3 РАЗА
+            const volatility = 0.0008 + Math.random() * 0.0015; // Было 0.0003-0.0005
+            const noise = (Math.random() - 0.5) * volatility;
+            
+            // 3. Имитация рыночного пульса (синусоидальная волна)
+            const pulse = Math.sin(Date.now() / 3000) * 0.0003;
+            
+            // 4. Обновляем цену (БЕЗ meanReversion!)
+            let next = currentPrice + this.trendDir * this.trendStrengthTest + noise + pulse;
+            
+            // Мягкие ограничения (только чтобы не улететь в космос)
+            const minPrice = this.basePrice * 0.85;
+            const maxPrice = this.basePrice * 1.15;
+            next = Math.max(minPrice, Math.min(maxPrice, next));
+            
+            return parseFloat(next.toFixed(6));
+        }
+        
+        // 🌊 ДЛЯ ОСТАЛЬНЫХ АКТИВОВ: Обновляем тренд для волнообразного движения
         this.updateTrend();
         
         // Mean reversion: цена стремится вернуться к базовой (адаптивная сила)
